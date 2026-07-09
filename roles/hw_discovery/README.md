@@ -1,108 +1,55 @@
-# hw_discovery Role
+# hw_discovery role
 
-**PXE Infrastructure and Hardware Discovery for Bare-Metal Servers**
+This role configures a bastion machine so it can PXE boot new servers, show an iPXE menu, and run a hardware discovery process.
 
-This role deploys a complete PXE boot environment designed to discover and inventory new bare-metal hardware. It uses **iPXE** as the primary bootloader (with proper chainloading for legacy BIOS) and boots machines into a customized Fedora Live environment for data collection.
+It sets up dnsmasq (for DHCP and TFTP), httpd (to serve the boot image and iPXE menu), copies the needed iPXE binaries, and deploys the main boot menu.
 
-## Overview
+## What this role does
 
-The role sets up:
-- DHCP + TFTP services via dnsmasq
-- iPXE boot menu with system information display
-- HTTP server serving the custom Fedora Live image
-- Safe fallback to classic pxelinux
-- Integration with the `hw_collector` role for report submission
+- Creates the TFTP and HTTP directory structure used for PXE booting.
+- Copies iPXE binaries (undionly.kpxe, ipxe.efi, snponly.efi, etc.) from a prepared offline artifacts directory.
+- Writes a dnsmasq configuration that provides DHCP addresses and serves files over TFTP.
+- Deploys an iPXE menu that lets the operator choose safe discovery, destructive wipe, or chain mode.
+- Starts and enables dnsmasq, httpd, and lldpd.
+- Opens the necessary firewall ports when firewalld is running.
 
-This is ideal for data center provisioning, bare-metal Kubernetes/OpenShift deployment preparation, or hardware inventory automation.
+## Important notes on configuration
 
-## Features
+The iPXE menu template passes options such as `chain=yes` and `wipe=strong` directly on the `kernel` line. Testing showed that using `imgargs` after loading the kernel did not reliably make those options appear in `/proc/cmdline` inside the live image. Putting the options on the kernel line is the method that worked consistently.
 
-- Full support for both Legacy BIOS and UEFI systems
-- Rich iPXE menu showing Service Tag / Serial Number for verification
-- Safe-by-default behavior (no disk changes unless explicitly confirmed)
-- Interactive confirmation for destructive operations
-- LLDP-based switch neighbor discovery
-- Optional 100MB disk header wipe (non-destructive to existing data partitions)
-- Easy fallback to classic pxelinux
-- Designed for air-gapped environments after initial preparation
+**DHCP Backend Choice**
 
-## Safety Mechanisms
+This role supports two options via the `dhcp_backend` variable:
 
-This role includes multiple layers of protection against accidental data loss:
+- `dnsmasq` (default): One process for DHCP + TFTP. Simpler but had repeated reliability problems (port 53 conflicts, not listening on DHCP ports) during testing.
+- `isc`: Uses traditional ISC DHCP (`dhcpd`) + `tftp-server`. This is what ultimately worked reliably in our environment after dnsmasq issues.
 
-1. **iPXE Menu Level**
-   - Clear visual warning for wipe option
-   - Interactive confirmation prompt (`y/n`)
-   - Safe option is the default on timeout
+Set `dhcp_backend: isc` in your inventory or when running the playbook if you want the ISC path.
 
-2. **Discovery Script Level**
-   - Hostname-based protection (blocks common bastion/management names)
-   - Protected MAC address list (customizable)
-   - Wipe only executes if `discovery.wipe=1` kernel parameter is present
+The dnsmasq configuration uses `bind-dynamic` and listens on a specific interface. On systems where `systemd-resolved` is also running and using port 53, dnsmasq will fail to start. In that case `systemd-resolved` should be stopped and disabled before using this role for DHCP.
 
-3. **Operational**
-   - Wipe option is clearly labeled as **DESTRUCTIVE**
-   - System information (serial number) is displayed before any action
+## Variables
 
-**Strong Recommendation**: Always add your bastion host's MAC address(es) to the `PROTECTED_MACS` array in `discovery-collect.sh`.
+See `defaults/main.yml` for the full list. The most commonly changed values are:
 
-## Requirements
+- `bastion_ip` — IP address the new machines will use to reach this server
+- `dhcp_interface` — the network interface that faces the new machines
+- `dhcp_range_start` / `dhcp_range_end` — IP range handed out to new machines
+- `offline_artifacts_dir` — where the prepared iPXE binaries and Fedora image live after extraction
 
-- Ansible control node (bastion) running Red Hat / Fedora
-- Dedicated provisioning network interface (usually `eth0`)
-- Firewall ports open: DHCP (67/68), TFTP (69), HTTP (80), Collector port (default 5000)
-- Offline artifacts prepared using `prepare_offline_artifacts_x86_64.yml`
+## Typical usage
 
-## Role Variables
+Include the role in a playbook that runs on the bastion:
 
-See `defaults/main.yml` and `group_vars/all/pxe.yml`.
+```yaml
+- hosts: bastion
+  roles:
+    - hw_discovery
+```
 
-**Key Variables:**
+After the role runs, the bastion should be ready to serve PXE boots for hardware discovery.
 
-| Variable                | Example Value                    | Description |
-|-------------------------|----------------------------------|-----------|
-| `pxe_subnet`            | `192.168.50.0/24`                | Provisioning subnet |
-| `pxe_dhcp_range`        | `192.168.50.100,192.168.50.200`  | DHCP range for clients |
-| `local_artifacts_dir`   | `/opt/offline-artifacts-x86_64`  | Path to extracted artifacts |
-| `bastion_ip`            | (auto-detected)                  | IP clients should use |
-| `collector_port`        | `5000`                           | Collector service port |
+## Related roles
 
-## Directory Structure Impact
-
-This role manages:
-- `/etc/dnsmasq.conf`
-- `/var/lib/tftpboot/ipxe/`
-- `/var/www/html/ipxe/boot.ipxe`
-- `/var/www/html/fedora-live/`
-
-## Usage
-
-```bash
-# Full deployment (PXE + Collector)
-ansible-playbook playbooks/discover_hw.yml -i environments/production/hosts
-
-## Boot Process
-
-1. New server performs network boot (PXE)
-2. dnsmasq serves the appropriate iPXE binary (`undionly.kpxe` for Legacy BIOS or `ipxe.efi` for UEFI)
-3. iPXE loads and displays the boot menu with system information (Service Tag / Serial Number, Product Name, etc.)
-4. User selects the desired option from the menu
-5. The custom Fedora Live image boots into RAM and automatically executes `discovery-collect.sh`
-6. Hardware inventory data (including LLDP switch info) is collected and the report is sent via HTTP POST to the collector on the bastion
-
-## Troubleshooting
-
-- Check dnsmasq logs: `journalctl -u dnsmasq -f`
-- Verify iPXE files are present in the TFTP root: `ls -l /var/lib/tftpboot/ipxe/`
-- Confirm firewall rules allow DHCP (UDP 67/68), TFTP (UDP 69), HTTP (TCP 80), and the collector port (default TCP 5000)
-- Use the **iPXE Shell** option from the menu for manual debugging and testing network connectivity
-- Check HTTP access to the squashfs image: `curl -I http://<bastion-ip>/fedora-live/squashfs.img`
-
-## Security Considerations
-
-- Run the PXE/DHCP services on an **isolated provisioning VLAN** whenever possible
-- Restrict access to the collector port (default 5000) to only the provisioning subnet
-- Regularly review and update the protected MAC address list in `discovery-collect.sh`
-- Monitor collector logs for unexpected reports
-- Consider implementing network ACLs or firewall rules to limit which machines can boot via PXE
-
+- `hw_collector` — receives the JSON reports sent by the discovery image
+- Custom IPA element `rich-discovery` — adds the actual collection script and systemd service into the boot image

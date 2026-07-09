@@ -1,5 +1,10 @@
 ---
 - name: Restart dnsmasq
-  ansible.builtin.systemd:
+  ansible.builtin.service:
     name: dnsmasq
+    state: restarted
+
+- name: Restart dhcpd
+  ansible.builtin.service:
+    name: dhcpd
     state: restarted

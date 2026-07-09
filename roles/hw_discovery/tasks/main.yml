@@ -1,59 +1,124 @@
 ---
-- name: Install required packages
-  ansible.builtin.dnf:
-    name: "{{ pxe_packages }}"
-    state: present
+# hw_discovery role - main tasks
+# Sets up the bastion to serve PXE/iPXE boot for hardware discovery.
+# Supports two backends: "isc" (default, what worked reliably) and "dnsmasq".
 
-- name: Create required directories
+- name: Ensure required directories exist
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     mode: '0755'
   loop:
+    - "{{ pxe_tftp_root }}"
+    - "{{ pxe_tftp_root }}/ipxe"
     - "{{ pxe_tftp_root }}/pxelinux.cfg"
     - "{{ pxe_http_root }}/fedora-live"
     - "{{ pxe_http_root }}/ipxe"
-    - "{{ pxe_tftp_root }}/ipxe"
     - "{{ collector_dir }}"
-    - "{{ local_artifacts_dir }}"
 
-- name: Copy iPXE binaries from offline artifacts
+- name: Copy iPXE binaries from prepared offline artifacts
   ansible.builtin.copy:
-    src: "{{ local_artifacts_dir }}/ipxe/{{ item }}"
-    dest: "{{ pxe_tftp_root }}/ipxe/{{ item | basename }}"
+    src: "{{ offline_artifacts_dir }}/ipxe/{{ item }}"
+    dest: "{{ pxe_tftp_root }}/ipxe/{{ item }}"
     mode: '0644'
+    remote_src: true
   loop:
     - undionly.kpxe
+    - ipxe.pxe
     - ipxe.efi
     - snponly.efi
+  when: offline_artifacts_dir is defined
 
-- name: Copy pxelinux.0 fallback
-  ansible.builtin.copy:
-    src: "/usr/share/syslinux/pxelinux.0"
-    dest: "{{ pxe_tftp_root }}/pxelinux.0"
-    remote_src: true
+# ============================================================
+# ISC DHCP + tftp-server path (default, what worked reliably)
+# ============================================================
+- name: Install ISC DHCP and tftp-server packages
+  ansible.builtin.package:
+    name:
+      - dhcp-server
+      - tftp-server
+      - tftp
+    state: present
+  when: dhcp_backend == "isc"
+
+- name: Deploy ISC DHCP configuration
+  ansible.builtin.template:
+    src: dhcpd.conf.j2
+    dest: /etc/dhcp/dhcpd.conf
     mode: '0644'
+  notify: Restart dhcpd
+  when: dhcp_backend == "isc"
 
+- name: Enable and start ISC DHCP and TFTP services
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - dhcpd
+    - tftp.socket
+  when: dhcp_backend == "isc"
+
+# ============================================================
+# dnsmasq path (alternative, kept for flexibility)
+# ============================================================
 - name: Deploy dnsmasq configuration
   ansible.builtin.template:
     src: dnsmasq.conf.j2
     dest: /etc/dnsmasq.conf
     mode: '0644'
   notify: Restart dnsmasq
+  when: dhcp_backend == "dnsmasq"
 
-- name: Deploy iPXE boot script
+- name: Install dnsmasq
+  ansible.builtin.package:
+    name: dnsmasq
+    state: present
+  when: dhcp_backend == "dnsmasq"
+
+- name: Enable and start dnsmasq
+  ansible.builtin.service:
+    name: dnsmasq
+    state: started
+    enabled: true
+  when: dhcp_backend == "dnsmasq"
+
+# ============================================================
+# Common tasks for both backends
+# ============================================================
+- name: Deploy iPXE boot menu
   ansible.builtin.template:
     src: ipxe/boot.ipxe.j2
     dest: "{{ pxe_http_root }}/ipxe/boot.ipxe"
     mode: '0644'
 
-- name: Enable and start services
-  ansible.builtin.systemd:
+- name: Ensure httpd and lldpd are installed
+  ansible.builtin.package:
+    name:
+      - httpd
+      - lldpd
+    state: present
+
+- name: Enable and start common services
+  ansible.builtin.service:
     name: "{{ item }}"
-    enabled: true
     state: started
+    enabled: true
   loop:
-    - dnsmasq
     - httpd
     - lldpd
 
+- name: Open firewall ports if firewalld is active
+  ansible.posix.firewalld:
+    port: "{{ item }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+  loop:
+    - 67
+    - 69
+    - 80
+    - "{{ collector_port }}"
+  when: ansible_facts.services['firewalld.service'] is defined and
+        ansible_facts.services['firewalld.service'].state == 'running'
+  ignore_errors: true

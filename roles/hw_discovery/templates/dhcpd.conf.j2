@@ -1,0 +1,22 @@
+# dhcpd.conf - ISC DHCP configuration for PXE hardware discovery
+# Managed by Ansible role hw_discovery (dhcp_backend: isc)
+
+option domain-name "local";
+option domain-name-servers {{ bastion_ip }};
+
+default-lease-time 43200;
+max-lease-time 86400;
+
+subnet {{ dhcp_subnet }} netmask {{ dhcp_netmask }} {
+    range {{ dhcp_range_start }} {{ dhcp_range_end }};
+    option routers {{ bastion_ip }};
+    option domain-name-servers {{ bastion_ip }};
+    next-server {{ bastion_ip }};
+
+    # Default to iPXE for UEFI machines
+    if exists user-class and option user-class = "iPXE" {
+        filename "ipxe/ipxe.efi";
+    } else {
+        filename "ipxe/undionly.kpxe";
+    }
+}
