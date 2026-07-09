@@ -1,0 +1,11 @@
+---
+pxe_packages:
+  - dnsmasq
+  - syslinux
+  - syslinux-tftpboot
+  - httpd
+  - python3
+  - python3-pip
+  - lldpd
+
+local_artifacts_dir: "{{ local_artifacts_dir | default('/opt/offline-artifacts-x86_64') }}"

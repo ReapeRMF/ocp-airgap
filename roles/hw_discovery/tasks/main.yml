@@ -1,0 +1,59 @@
+---
+- name: Install required packages
+  ansible.builtin.dnf:
+    name: "{{ pxe_packages }}"
+    state: present
+
+- name: Create required directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ pxe_tftp_root }}/pxelinux.cfg"
+    - "{{ pxe_http_root }}/fedora-live"
+    - "{{ pxe_http_root }}/ipxe"
+    - "{{ pxe_tftp_root }}/ipxe"
+    - "{{ collector_dir }}"
+    - "{{ local_artifacts_dir }}"
+
+- name: Copy iPXE binaries from offline artifacts
+  ansible.builtin.copy:
+    src: "{{ local_artifacts_dir }}/ipxe/{{ item }}"
+    dest: "{{ pxe_tftp_root }}/ipxe/{{ item | basename }}"
+    mode: '0644'
+  loop:
+    - undionly.kpxe
+    - ipxe.efi
+    - snponly.efi
+
+- name: Copy pxelinux.0 fallback
+  ansible.builtin.copy:
+    src: "/usr/share/syslinux/pxelinux.0"
+    dest: "{{ pxe_tftp_root }}/pxelinux.0"
+    remote_src: true
+    mode: '0644'
+
+- name: Deploy dnsmasq configuration
+  ansible.builtin.template:
+    src: dnsmasq.conf.j2
+    dest: /etc/dnsmasq.conf
+    mode: '0644'
+  notify: Restart dnsmasq
+
+- name: Deploy iPXE boot script
+  ansible.builtin.template:
+    src: ipxe/boot.ipxe.j2
+    dest: "{{ pxe_http_root }}/ipxe/boot.ipxe"
+    mode: '0644'
+
+- name: Enable and start services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - dnsmasq
+    - httpd
+    - lldpd
+

@@ -1,0 +1,90 @@
+---
+# ansible/playbooks/prepare_offline_artifacts_x86_64.yml
+# Run this on the bastion WHILE IT STILL HAS INTERNET ACCESS.
+
+- name: Prepare Offline Artifacts Bundle (x86_64)
+  hosts: localhost
+  gather_facts: true
+  vars:
+    artifacts_dir: "~/offline-artifacts-x86_64"
+    fedora_version: "44"
+    fedora_iso_name: "Fedora-Workstation-Live-44-1.7.x86_64.iso"
+    fedora_iso_url: "https://download.fedoraproject.org/pub/fedora/linux/releases/{{ fedora_version }}/Workstation/x86_64/iso/{{ fedora_iso_name }}"
+    ipxe_dir: "{{ artifacts_dir }}/ipxe"
+    isos_dir: "{{ artifacts_dir }}/isos"
+    collections_to_download:
+      - ansible.posix
+      - community.general
+
+  tasks:
+
+    - name: Create directory structure
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ artifacts_dir }}"
+        - "{{ isos_dir }}"
+        - "{{ ipxe_dir }}"
+        - "{{ ipxe_dir }}/x86_64-efi"
+        - "{{ ipxe_dir }}/x86_64-efi-sb"
+        - "{{ artifacts_dir }}/collections"
+
+    - name: Download Fedora Workstation Live ISO (x86_64)
+      ansible.builtin.get_url:
+        url: "{{ fedora_iso_url }}"
+        dest: "{{ isos_dir }}/{{ fedora_iso_name }}"
+        mode: '0644'
+        timeout: 600
+      register: fedora_download
+      until: fedora_download is succeeded
+      retries: 3
+
+    - name: Download iPXE binaries for x86_64 (BIOS + EFI + fallbacks)
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "{{ ipxe_dir }}/{{ item.dest }}"
+        mode: '0644'
+      loop:
+        # BIOS / Legacy
+        - { url: "https://boot.ipxe.org/undionly.kpxe", dest: "undionly.kpxe" }
+        - { url: "https://boot.ipxe.org/ipxe.pxe", dest: "ipxe.pxe" }
+
+        # EFI
+        - { url: "https://boot.ipxe.org/x86_64-efi/ipxe.efi", dest: "ipxe.efi" }
+        - { url: "https://boot.ipxe.org/x86_64-efi/snponly.efi", dest: "snponly.efi" }
+        - { url: "https://boot.ipxe.org/x86_64-efi/ipxe.efi", dest: "x86_64-efi/ipxe.efi" }
+        - { url: "https://boot.ipxe.org/x86_64-efi/snponly.efi", dest: "x86_64-efi/snponly.efi" }
+
+        # Secure Boot
+        - { url: "https://boot.ipxe.org/x86_64-efi-sb/ipxe.efi", dest: "x86_64-efi-sb/ipxe.efi" }
+      register: ipxe_download
+      until: ipxe_download is succeeded
+      retries: 3
+
+    - name: Download Ansible collections (offline)
+      ansible.builtin.command:
+        cmd: >
+          ansible-galaxy collection install {{ item }}
+          --collections-path "{{ artifacts_dir }}/collections"
+          --force
+      loop: "{{ collections_to_download }}"
+      changed_when: false
+
+    - name: Create tarball
+      ansible.builtin.archive:
+        path: "{{ artifacts_dir }}"
+        dest: "~/offline-artifacts-x86_64.tar.gz"
+        format: gz
+        mode: '0644'
+
+    - name: Show summary
+      ansible.builtin.debug:
+        msg: |
+          =====================================================
+          x86_64 Offline artifacts preparation complete!
+          Tarball: ~/offline-artifacts-x86_64.tar.gz
+          =====================================================
+
+

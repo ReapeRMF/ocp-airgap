@@ -1,0 +1,13 @@
+interface=eno1
+dhcp-range={{ pxe_dhcp_range }},12h
+enable-tftp
+tftp-root={{ pxe_tftp_root }}
+
+# iPXE Chainloading
+dhcp-match=set:bios,option:client-arch,0
+dhcp-boot=tag:bios,ipxe/undionly.kpxe
+
+dhcp-match=set:uefi64,option:client-arch,7
+dhcp-boot=tag:uefi64,ipxe/ipxe.efi
+
+dhcp-boot=pxelinux.0

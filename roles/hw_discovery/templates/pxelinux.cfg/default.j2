@@ -1,0 +1,20 @@
+DEFAULT menu
+PROMPT 0
+MENU TITLE Hardware Discovery - Classic pxelinux Fallback
+TIMEOUT 80
+
+LABEL discovery
+    MENU LABEL ^1 Safe Discovery (No Wipe)
+    KERNEL fedora-live/vmlinuz
+    APPEND initrd=fedora-live/initrd.img root=live:http://{{ bastion_ip }}/fedora-live/squashfs.img rd.live.image rd.live.overlay=none ip=dhcp quiet
+
+LABEL discovery-wipe
+    MENU LABEL ^2 DESTRUCTIVE - 100MB Header Wipe + Discovery
+    KERNEL fedora-live/vmlinuz
+    APPEND initrd=fedora-live/initrd.img root=live:http://{{ bastion_ip }}/fedora-live/squashfs.img rd.live.image rd.live.overlay=none ip=dhcp discovery.wipe=1 quiet
+
+MENU SEPARATOR
+
+LABEL reboot
+    MENU LABEL Reboot System
+    COM32 reboot.c32

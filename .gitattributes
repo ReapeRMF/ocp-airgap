@@ -1,0 +1,40 @@
+# =========================
+# Force LF line endings (important for Linux scripts & Ansible)
+# =========================
+*.sh            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.py            text eol=lf
+*.j2            text eol=lf
+*.conf          text eol=lf
+*.ipxe          text eol=lf
+*.cfg           text eol=lf
+*.md            text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+Makefile        text eol=lf
+
+# Ansible inventory & vars
+inventory/**    text eol=lf
+group_vars/**   text eol=lf
+host_vars/**    text eol=lf
+roles/**        text eol=lf
+
+# =========================
+# Binary files (do not convert line endings)
+# =========================
+*.initramfs     binary
+*.kernel        binary
+*.squashfs      binary
+*.iso           binary
+*.img           binary
+*.tar.gz        binary
+*.tar.bz2       binary
+*.gz            binary
+*.zip           binary
+
+# =========================
+# Diff settings (optional but helpful)
+# =========================
+*.yml           diff=yaml
+*.yaml          diff=yaml

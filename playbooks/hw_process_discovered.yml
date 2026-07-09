@@ -1,0 +1,19 @@
+---
+- name: Process discovered hardware reports
+  hosts: localhost
+  gather_facts: false
+  vars:
+    inventory_dir: "/var/lib/hardware-inventory"
+  tasks:
+    - name: Find JSON reports
+      ansible.builtin.find:
+        paths: "{{ inventory_dir }}"
+        patterns: "*.json"
+      register: reports
+
+    - name: Show summary of discovered hosts
+      ansible.builtin.debug:
+        msg: |
+          MAC: {{ item.path | basename | splitext | first }}
+          IP:  {{ (lookup('file', item.path) | from_json).current_ip | default('N/A') }}
+      loop: "{{ reports.files }}"

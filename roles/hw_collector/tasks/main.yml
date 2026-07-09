@@ -1,0 +1,27 @@
+---
+- name: Install Flask
+  ansible.builtin.pip:
+    name: flask
+    state: present
+
+- name: Create collector directory
+  ansible.builtin.file:
+    path: /opt/hardware-collector
+    state: directory
+    mode: '0755'
+
+- name: Deploy collector app and service
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+  loop:
+    - { src: hw_collector_app.py.j2, dest: /opt/hardware-collector/collector.py, mode: '0755' }
+    - { src: hw_collector.service.j2, dest: /etc/systemd/system/hw_collector.service }
+
+- name: Reload systemd and start collector
+  ansible.builtin.systemd:
+    name: hw_collector
+    enabled: true
+    state: restarted
+    daemon_reload: true

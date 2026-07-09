@@ -1,0 +1,10 @@
+---
+pxe_subnet: "192.168.1.0/24"
+pxe_dhcp_range: "192.168.1.100,192.168.1.200"
+pxe_tftp_root: "/var/lib/tftpboot"
+pxe_http_root: "/var/www/html"
+collector_port: 5000
+collector_dir: "/var/lib/hardware-inventory"
+
+local_artifacts_dir: "/opt/offline-artifacts-x86_64"
+bastion_ip: "192.168.1.185"   # Your current IP

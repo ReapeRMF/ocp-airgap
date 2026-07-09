@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+from flask import Flask, request, jsonify
+import json, os
+
+app = Flask(__name__)
+INVENTORY_DIR = "{{ collector_dir }}"
+NEXTBOOT_DIR = "/var/lib/pxe-nextboot"
+
+os.makedirs(INVENTORY_DIR, exist_ok=True)
+os.makedirs(NEXTBOOT_DIR, exist_ok=True)
+
+@app.route('/api/inventory', methods=['POST'])
+def receive():
+    data = request.get_json(force=True)
+    mac = data.get('mac', 'unknown').replace(':', '-')
+    
+    # Save full inventory report
+    with open(f"{INVENTORY_DIR}/{mac}.json", 'w') as f:
+        json.dump(data, f, indent=2)
+    
+    # === Automatically configure next boot to OpenShift Installer ===
+    nextboot_script = f"{NEXTBOOT_DIR}/{mac}.ipxe"
+    with open(nextboot_script, 'w') as f:
+        f.write(f"""#!ipxe
+echo ================================================
+echo Hardware discovery complete for {mac}
+echo Booting OpenShift Installer (Air-Gapped)...
+echo ================================================
+kernel http://{{ bastion_ip }}/openshift/vmlinuz
+initrd http://{{ bastion_ip }}/openshift/initrd.img
+imgargs vmlinuz initrd=initrd.img coreos.live.rootfs_url=http://{{ bastion_ip }}/openshift/rootfs.img ip=dhcp rd.neednet=1 quiet
+boot
+""")
+    
+    print(f"✓ OpenShift next-boot configured for {mac}")
+    return jsonify({"status": "ok", "mac": mac, "next": "openshift_installer"}), 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port={{ collector_port }})

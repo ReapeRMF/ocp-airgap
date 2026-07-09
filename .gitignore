@@ -1,0 +1,68 @@
+# =========================
+# Ansible
+# =========================
+*.retry
+ansible.log
+ansible-navigator.log
+
+# =========================
+# Downloaded collections (we don't commit these)
+# =========================
+collections/
+ansible_collections/
+
+# =========================
+# diskimage-builder / IPA build artifacts
+# =========================
+/var/tmp/hw-discovery*
+/var/tmp/ipa-*
+/var/tmp/lmc-*
+/var/tmp/fedora-discovery-pxe
+/tmp/dib_build.*
+
+*.initramfs
+*.kernel
+*.squashfs
+*.iso
+*.rpm
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+env/
+ENV/
+
+# =========================
+# Offline / large artifacts
+# =========================
+*.gz
+*.tar
+*.tar.gz
+*.tar.bz2
+offline-artifacts*/
+
+# =========================
+# Editor / OS
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# =========================
+# Secrets
+# =========================
+vault-password.txt
+*.pem
+*.key
+group_vars/*/vault.yml
+vault.*
+*.vault
+

@@ -1,0 +1,11 @@
+---
+- name: Deploy PXE Infrastructure + Hardware Collector
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  become_method: sudo
+  become_user: root
+  roles:
+    - hw_discovery
+    - hw_collector

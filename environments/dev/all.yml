@@ -1,0 +1,13 @@
+---
+# Group variables for PXE hardware discovery
+
+pxe_subnet: "192.168.50.0/24"
+pxe_dhcp_range: "192.168.50.100,192.168.50.200"
+pxe_tftp_root: "/var/lib/tftpboot"
+pxe_http_root: "/var/www/html"
+collector_port: 5000
+collector_dir: "/var/lib/hardware-inventory"
+bastion_ip: "{{ ansible_default_ipv4.address | default('192.168.50.10') }}"
+
+# Path to offline artifacts (after extraction)
+local_artifacts_dir: "/opt/offline-artifacts-x86_64"
