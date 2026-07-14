@@ -1,0 +1,87 @@
+---
+- name: Air-Gapped Bastion Infrastructure Installation
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars:
+    # Resolve the running user's actual home directory before privilege escalation
+    real_user_home: "{{ lookup('env', 'HOME') }}"
+    airgap_staging_dir: "{{ real_user_home }}/ansible/airgap_payload"
+
+  tasks:
+    - name: Validate that local staging folder exists
+      ansible.builtin.stat:
+        path: "{{ airgap_staging_dir }}"
+      register: staging_stat
+      failed_when: not staging_stat.stat.exists
+
+    - name: Create local temporary user collection path
+      ansible.builtin.file:
+        path: "{{ real_user_home }}/.ansible/collections"
+        state: directory
+        mode: '0755'
+      become: false
+
+    - name: Find local archived Ansible collections
+      ansible.builtin.find:
+        paths: "{{ airgap_staging_dir }}/ansible_collections"
+        patterns: "community-general-*.tar.gz"
+      register: collection_archive
+      become: false
+
+    - name: Install internal Ansible collections from local staging path
+      ansible.builtin.command: >
+        ansible-galaxy collection install {{ item.path }} --force
+      loop: "{{ collection_archive.files }}"
+      when: collection_archive.matched > 0
+      changed_when: true
+      become: false
+
+    - name: Gather all downloaded offline RPM packages
+      ansible.builtin.find:
+        paths: "{{ airgap_staging_dir }}/rpm_packages"
+        patterns: "*.rpm"
+      register: found_rpms
+
+    - name: Filter out core system and release packages that cause conflicts
+      ansible.builtin.set_fact:
+        install_rpms: >-
+          {{
+            found_rpms.files 
+            | map(attribute='path') 
+            | reject('search', 'fedora-release') 
+            | reject('search', 'systemd') 
+            | reject('search', 'glibc') 
+            | reject('search', 'bash') 
+            | reject('search', 'coreutils') 
+            | reject('search', 'setup') 
+            | reject('search', 'filesystem') 
+            | list
+          }}
+
+    - name: Install host system dependencies concurrently via batch DNF
+      ansible.builtin.dnf:
+        name: "{{ install_rpms }}"
+        state: present
+        disable_gpg_check: true
+
+    - name: Create baseline directory structure for boot files and inventory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "/var/lib/hardware-inventory"
+        - "/var/www/html/ipxe"
+
+    - name: Copy stable bootstrap binaries to local TFTP/HTTP roots
+      ansible.builtin.copy:
+        src: "{{ airgap_staging_dir }}/ipxe_binaries/{{ item }}"
+        dest: "/var/www/html/ipxe/{{ item }}"
+        mode: '0644'
+      loop:
+        - "ipxe.pxe"
+        - "ipxe.efi"
+      failed_when: false

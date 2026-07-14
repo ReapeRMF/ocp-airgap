@@ -4,6 +4,7 @@
 
 pxe_tftp_root: /var/lib/tftpboot
 pxe_http_root: /var/www/html
+ipa_output_dir: "{{ pxe_http_root }}/discovery"
 collector_port: 5000
 collector_dir: /var/lib/hardware-inventory
 bastion_ip: "{{ ansible_default_ipv4.address | default('192.168.50.10') }}"

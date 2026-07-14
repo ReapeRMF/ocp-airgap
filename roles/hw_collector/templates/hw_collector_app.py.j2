@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+import json
+import os
 from flask import Flask, request, jsonify
-import json, os
 
 app = Flask(__name__)
-INVENTORY_DIR = "{{ collector_dir }}"
-NEXTBOOT_DIR = "/var/lib/pxe-nextboot"
+INVENTORY_DIR = "{{ collector_data_dir | default('/var/lib/hardware-inventory') }}"
+NEXTBOOT_DIR = "{{ pxe_http_root | default('/var/www/html') }}/nextboot"
 
 os.makedirs(INVENTORY_DIR, exist_ok=True)
 os.makedirs(NEXTBOOT_DIR, exist_ok=True)
@@ -12,18 +13,23 @@ os.makedirs(NEXTBOOT_DIR, exist_ok=True)
 @app.route('/api/inventory', methods=['POST'])
 def receive():
     data = request.get_json(force=True)
-    mac = data.get('mac', 'unknown').replace(':', '-')
     
-    # Save full inventory report
-    with open(f"{INVENTORY_DIR}/{mac}.json", 'w') as f:
+    if 'primary_id' not in data or not data['primary_id']:
+        return jsonify({"status": "error", "message": "Missing required primary_id"}), 400
+        
+    primary_id = data['primary_id']
+    
+    # Save the full payload completely unmodified
+    filename = os.path.join(INVENTORY_DIR, f"{primary_id}.json")
+    with open(filename, 'w') as f:
         json.dump(data, f, indent=2)
-    
-    # === Automatically configure next boot to OpenShift Installer ===
-    nextboot_script = f"{NEXTBOOT_DIR}/{mac}.ipxe"
+
+    # Automatically configure next boot target script inside the web directory
+    nextboot_script = os.path.join(NEXTBOOT_DIR, f"{primary_id}.ipxe")
     with open(nextboot_script, 'w') as f:
         f.write(f"""#!ipxe
 echo ================================================
-echo Hardware discovery complete for {mac}
+echo Hardware discovery complete for {primary_id}
 echo Booting OpenShift Installer (Air-Gapped)...
 echo ================================================
 kernel http://{{ bastion_ip }}/openshift/vmlinuz
@@ -31,9 +37,9 @@ initrd http://{{ bastion_ip }}/openshift/initrd.img
 imgargs vmlinuz initrd=initrd.img coreos.live.rootfs_url=http://{{ bastion_ip }}/openshift/rootfs.img ip=dhcp rd.neednet=1 quiet
 boot
 """)
-    
-    print(f"✓ OpenShift next-boot configured for {mac}")
-    return jsonify({"status": "ok", "mac": mac, "next": "openshift_installer"}), 200
+
+    print(f"✓ OpenShift next-boot configured for {primary_id}")
+    return jsonify({"status": "ok", "primary_id": primary_id, "next": "openshift_installer"}), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port={{ collector_port }})

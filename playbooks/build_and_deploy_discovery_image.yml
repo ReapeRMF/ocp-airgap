@@ -1,0 +1,16 @@
+---
+# build_and_deploy_discovery_image.yml
+- name: Build and deploy discovery image
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    ipa_output_dir: "/var/www/html/discovery"
+    bastion_ip: "{{ ansible_default_ipv4.address | default('192.168.50.10') }}"
+    collector_port: 5000
+
+  tasks:
+    - name: Execute clean internal dynamic agent image build
+      ansible.builtin.include_role:
+        name: hw_discovery
+        tasks_from: build-ipa.yml
