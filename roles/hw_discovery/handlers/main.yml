@@ -1,5 +1,17 @@
 ---
+# roles/hw_discovery/handlers/main.yml
+
 - name: Restart dnsmasq
-  ansible.builtin.systemd:
+  ansible.builtin.service:
     name: dnsmasq
+    state: restarted
+
+- name: Restart dhcpd
+  ansible.builtin.service:
+    name: dhcpd
+    state: restarted
+
+- name: Restart httpd
+  ansible.builtin.service:
+    name: httpd
     state: restarted

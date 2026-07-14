@@ -1,0 +1,238 @@
+---
+# roles/hw_discovery/tasks/build-ipa.yml
+
+- name: Create working build cache directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ lookup('env', 'HOME') }}/.cache/ipa-build/dib-build/elements/hw-discovery/install.d"
+    - "{{ ipa_output_dir }}"
+
+- name: Clean previous IPA build artifacts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ lookup('env', 'HOME') }}/.cache/ipa-build/ipa-hw-discovery"
+    - "{{ lookup('env', 'HOME') }}/.cache/ipa-build/ipa-hw-discovery.kernel"
+    - "{{ lookup('env', 'HOME') }}/.cache/ipa-build/ipa-hw-discovery.initramfs"
+
+- name: Generate the hw-discovery element layout dynamically
+  ansible.builtin.copy:
+    dest: "{{ lookup('env', 'HOME') }}/.cache/ipa-build/dib-build/elements/hw-discovery/install.d/99-hw-discovery"
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      set +e
+      
+      echo ">>> Injecting Production hw-discovery runtime layout..."
+
+      # 1. Write the isolation runner script into the target OS runtime bin path
+      cat > /usr/local/bin/hw-discovery.sh << 'EOF'
+      #!/bin/bash
+      set +e
+      echo "================================================================"
+      echo "=== Hardware Discovery Execution Started                     ==="
+      echo "================================================================"
+
+      WIPE_MODE="none"
+      CHAIN_MODE="no"
+      grep -q 'wipe=strong' /proc/cmdline && WIPE_MODE="strong"
+      grep -q 'chain=yes'   /proc/cmdline && CHAIN_MODE="yes"
+
+      PRIMARY_ID=$(timeout 5 dmidecode -s system-serial-number 2>/dev/null | tr -d ' \t\r\n')
+      [ -z "$PRIMARY_ID" ] && PRIMARY_ID=$(timeout 5 dmidecode -s system-uuid 2>/dev/null | tr -d ' \t\r\n')
+      [ -z "$PRIMARY_ID" ] && PRIMARY_ID=$(ip -o link show | awk '/link\/ether/ {print $2; exit}' | tr ':' '-')
+
+      MAC=$(cat /sys/class/net/*/address 2>/dev/null | grep -v '00:00:00:00:00:00' | head -1 | tr ':' '-')
+      IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4; exit}' | cut -d/ -f1)
+      TIMESTAMP=$(date -Iseconds)
+
+      SYSTEM_SERIAL=$(timeout 3 dmidecode -s system-serial-number 2>/dev/null || echo "unknown")
+      SYSTEM_PRODUCT=$(timeout 3 dmidecode -s system-product-name 2>/dev/null || echo "unknown")
+      SYSTEM_VERSION=$(timeout 3 dmidecode -s system-version 2>/dev/null || echo "unknown")
+      SYSTEM_SKU=$(timeout 3 dmidecode -s system-sku-number 2>/dev/null || echo "unknown")
+      SYSTEM_UUID=$(timeout 3 dmidecode -s system-uuid 2>/dev/null || echo "unknown")
+      CHASSIS_SERIAL=$(timeout 3 dmidecode -s chassis-serial-number 2>/dev/null || echo "unknown")
+      BASEBOARD_SERIAL=$(timeout 3 dmidecode -s baseboard-serial-number 2>/dev/null || echo "unknown")
+      BOOT_MODE=$([ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy")
+
+      CPU_COUNT=$(lscpu | awk '/^CPU\(s\):/ {print $2}')
+      MEM_TOTAL=$(free -h | awk '/Mem:/ {print $2}')
+      DISK_CONTROLLERS=$(timeout 5 lspci -nn 2>/dev/null | grep -iE 'RAID|SATA|SCSI|NVMe|storage controller' | head -10 || echo "")
+
+      # --- NEW TELEMETRY FIELDS ADDED FROM BACKLOG ---
+      BOOT_SEQUENCE=$(efibootmgr 2>/dev/null | grep -i "BootOrder" | cut -d' ' -f2 || echo "unknown")
+      ACTIVE_BOOT_TARGET=$(efibootmgr 2>/dev/null | grep -i "BootCurrent" | cut -d' ' -f2 || echo "unknown")
+      CPU_MICROCODE=$(grep -m1 -i "microcode" /proc/cpuinfo | awk '{print $3}' || echo "unknown")
+
+      NICS_DETAILED="[]"
+      BOOT_INTERFACE=""
+      DEFAULT_ROUTE_IFACE=$(ip route show default 2>/dev/null | awk '/dev/ {print $5; exit}')
+
+      for iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
+          NM_MAC=$(cat /sys/class/net/"$iface"/address 2>/dev/null)
+          SPEED=$(cat /sys/class/net/"$iface"/speed 2>/dev/null || echo "unknown")
+          STATE=$(cat /sys/class/net/"$iface"/operstate 2>/dev/null || echo "unknown")
+          DRIVER=$(timeout 3 ethtool -i "$iface" 2>/dev/null | awk '/driver:/ {print $2}')
+          PCI_ADDR=$(timeout 3 ethtool -i "$iface" 2>/dev/null | awk '/bus-info:/ {print $2}')
+
+          IS_BOOT="false"
+          if [ "$iface" = "$DEFAULT_ROUTE_IFACE" ]; then
+              IS_BOOT="true"
+              BOOT_INTERFACE="$iface"
+          fi
+
+          NIC_OBJ=$(jq -n \
+              --arg name "$iface" \
+              --arg mac "$NM_MAC" \
+              --arg speed "$SPEED" \
+              --arg state "$STATE" \
+              --arg driver "${DRIVER:-unknown}" \
+              --arg pci "${PCI_ADDR:-}" \
+              --argjson is_boot "$IS_BOOT" \
+              '{name: $name, mac: $mac, speed_mbps: $speed, state: $state, driver: $driver, pci_address: $pci, is_boot_interface: $is_boot}')
+          NICS_DETAILED=$(echo "$NICS_DETAILED" | jq --argjson nic "$NIC_OBJ" '. + [$nic]')
+      done
+
+      BOOT_MAC=$(cat /sys/class/net/"$BOOT_INTERFACE"/address 2>/dev/null || echo "")
+      LLDP_INFO="{}"
+      command -v lldpctl >/dev/null 2>&1 && LLDP_INFO=$(timeout 5 lldpctl -f json 2>/dev/null || echo '{}')
+
+      DISKS_DETAILED="[]"
+      for disk in $(lsblk -dn -o NAME,TYPE 2>/dev/null | awk '$2=="disk" {print $1}'); do
+          DEV="/dev/${disk}"
+          BY_PATH=$(ls -1 /dev/disk/by-path/ 2>/dev/null | xargs -I{} sh -c 'readlink -f /dev/disk/by-path/{} | grep -q "'"$DEV"'" && echo "/dev/disk/by-path/{}"' | head -1 || echo "")
+          BY_ID=$(ls -1 /dev/disk/by-id/ 2>/dev/null | xargs -I{} sh -c 'readlink -f /dev/disk/by-id/{} | grep -q "'"$DEV"'" && echo "/dev/disk/by-id/{}"' | head -1 || echo "")
+          SIZE=$(lsblk -dn -o SIZE "$DEV" 2>/dev/null | tr -d ' ')
+          MODEL=$(lsblk -dn -o MODEL "$DEV" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+          VENDOR=$(lsblk -dn -o VENDOR "$DEV" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+          SERIAL=$(lsblk -dn -o SERIAL "$DEV" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+          WWN=$(lsblk -dn -o WWN "$DEV" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+          TRAN=$(lsblk -dn -o TRAN "$DEV" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+          ROTATIONAL=$(cat /sys/block/"$disk"/queue/rotational 2>/dev/null)
+          [ "$ROTATIONAL" = "1" ] && ROTATIONAL="true" || ROTATIONAL="false"
+          SIZE_GIB=$(lsblk -b -dn -o SIZE "$DEV" 2>/dev/null | awk '{printf "%.0f", $1/1024/1024/1024}')
+          HCTL=""
+          [ -d /sys/block/"$disk"/device ] && HCTL=$(cat /sys/block/"$disk"/device/hctl 2>/dev/null || echo "")
+
+          # --- NEW STORAGE TELEMETRY FIELDS FROM BACKLOG ---
+          SECTOR_SIZE=$(cat /sys/block/"$disk"/queue/physical_block_size 2>/dev/null || echo "unknown")
+          SSD_LIFE_REMAINING=$(smartctl -A "$DEV" 2>/dev/null | grep -E -i "Media_Wearout_Indicator|Percent_Life_Remaining" | awk '{print $NF}' | tr -d '%' | head -1 || echo "unknown")
+
+          DISK_OBJ=$(jq -n \
+              --arg dev "$DEV" --arg by_path "${BY_PATH:-}" --arg by_id "${BY_ID:-}" --arg model "${MODEL:-}" \
+              --arg vendor "${VENDOR:-}" --arg serial "${SERIAL:-}" --arg wwn "${WWN:-}" --arg transport "${TRAN:-}" \
+              --argjson size_gib "${SIZE_GIB:-0}" --argjson rotational "$ROTATIONAL" --arg hctl "${HCTL:-}" \
+              --arg sector_size "$SECTOR_SIZE" --arg ssd_life "$SSD_LIFE_REMAINING" \
+              '{device: $dev, by_path: $by_path, by_id: $by_id, model: $model, vendor: $vendor, serial: $serial, wwn: $wwn, transport: $transport, size_gib: $size_gib, rotational: $rotational, hctl: $hctl, sector_size: $sector_size, ssd_life_remaining: $ssd_life}')
+          DISKS_DETAILED=$(echo "$DISKS_DETAILED" | jq --argjson disk "$DISK_OBJ" '. + [$disk]')
+      done
+
+      if [ "$WIPE_MODE" = "strong" ]; then
+          echo ">>> Performing strong disk wipe..."
+          for disk in $(lsblk -dn -o NAME,TYPE 2>/dev/null | awk '$2=="disk"{print "/dev/"$1}'); do
+              timeout 10 wipefs -a "$disk" >/dev/null 2>&1 || true
+              timeout 10 sgdisk --zap-all "$disk" >/dev/null 2>&1 || true
+              timeout 30 dd if=/dev/zero of="$disk" bs=1M count=1024 status=none 2>/dev/null || true
+              timeout 10 blkdiscard "$disk" >/dev/null 2>&1 || true
+              sync
+          done
+      fi
+
+      cat > /var/tmp/hardware.json << JSON
+      {
+        "primary_id": "${PRIMARY_ID}",
+        "mac": "${MAC}",
+        "current_ip": "${IP}",
+        "timestamp": "${TIMESTAMP}",
+        "wipe_mode": "${WIPE_MODE}",
+        "chain_mode": "${CHAIN_MODE}",
+        "boot_sequence": "${BOOT_SEQUENCE}",
+        "active_boot_target": "${ACTIVE_BOOT_TARGET}",
+        "cpu_microcode": "${CPU_MICROCODE}",
+        "system": {
+          "serial": "${SYSTEM_SERIAL}",
+          "product": "${SYSTEM_PRODUCT}",
+          "version": "${SYSTEM_VERSION}",
+          "sku": "${SYSTEM_SKU}",
+          "uuid": "${SYSTEM_UUID}",
+          "chassis_serial": "${CHASSIS_SERIAL}",
+          "baseboard_serial": "${BASEBOARD_SERIAL}",
+          "boot_mode": "${BOOT_MODE}"
+        },
+        "cpu_count": "${CPU_COUNT}",
+        "memory": "${MEM_TOTAL}",
+        "disk_controllers": "${DISK_CONTROLLERS}",
+        "boot_interface": "${BOOT_INTERFACE}",
+        "boot_mac": "${BOOT_MAC}",
+        "nics_detailed": ${NICS_DETAILED},
+        "lldp_neighbors": ${LLDP_INFO},
+        "disks_detailed": ${DISKS_DETAILED},
+        "source": "hw-discovery-element"
+      }
+      JSON
+
+      echo ">>> Pushing hardware telemetry report to collector..."
+      curl -sS --connect-timeout 5 --max-time 15 -X POST -H "Content-Type: application/json" --data @/var/tmp/hardware.json "http://{{ bastion_ip }}:{{ collector_port }}/api/inventory" || echo "WARNING: Could not reach collector"
+
+      echo "================================================================"
+      if [ "$CHAIN_MODE" = "yes" ]; then
+          echo ">>> DISCOVERY COMPLETE - CHAIN MODE"
+          while true; do sleep 300; done
+      else
+          echo ">>> DISCOVERY COMPLETE - Execution finalized."
+          sleep 5 && reboot
+      fi
+      EOF
+
+      chmod +x /usr/local/bin/hw-discovery.sh
+
+      # 2. Write a systemd runtime unit that runs strictly AFTER multiuser targets and networks are settled
+      cat > /etc/systemd/system/hw-discovery.service << 'EOF'
+      [Unit]
+      Description=Runtime Baremetal Hardware Discovery Service
+      After=network-online.target multi-user.target
+      Wants=network-online.target
+
+      [Service]
+      Type=idle
+      ExecStart=/usr/local/bin/hw-discovery.sh
+      StandardOutput=journal+console
+      StandardError=journal+console
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+
+      # 3. Natively enable the service using systemd tooling within chroot
+      systemctl enable hw-discovery.service
+
+- name: Build custom IPA Image (CentOS Stream 9 framework)
+  ansible.builtin.shell: >
+    ironic-python-agent-builder centos
+    -r 9-stream
+    --elements-path {{ lookup('env', 'HOME') }}/.cache/ipa-build/dib-build/elements
+    -e hw-discovery
+    -o {{ lookup('env', 'HOME') }}/.cache/ipa-build/ipa-hw-discovery
+  become: true
+  become_flags: "-H -S"
+
+- name: Move kernel and initramfs to configured output location
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+    remote_src: true
+  loop:
+    - src: "{{ lookup('env', 'HOME') }}/.cache/ipa-build/ipa-hw-discovery.kernel"
+      dest: "{{ ipa_output_dir }}/vmlinuz"
+    - src: "{{ lookup('env', 'HOME') }}/.cache/ipa-build/ipa-hw-discovery.initramfs"
+      dest: "{{ ipa_output_dir }}/initrd.img"
+  become: true
+
+# FIXED: Automatically re-renders and updates your active iPXE boot menu configuration immediately
+- name: Automatically deploy/refresh iPXE boot menu to match new image paths
+  ansible.builtin.include_tasks: deploy_ipxe_menu.yml

@@ -1,3 +1,10 @@
-#SPDX-License-Identifier: MIT-0
 ---
-# defaults file for hw_collector
+collector_user: hwcollector
+collector_group: hwcollector
+collector_dir: /opt/hw-collector
+collector_port: 5000
+collector_venv: /opt/hw-collector/venv
+
+# Directory containing pre-downloaded wheels for air-gapped installs.
+# If this directory exists when the role runs, it will install from there instead of PyPI.
+offline_wheel_dir: /opt/offline-artifacts/wheels

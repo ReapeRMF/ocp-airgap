@@ -1,59 +1,81 @@
 ---
-- name: Install required packages
-  ansible.builtin.dnf:
-    name: "{{ pxe_packages }}"
-    state: present
+# roles/hw_discovery/tasks/main.yml
 
-- name: Create required directories
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: directory
-    mode: '0755'
-  loop:
-    - "{{ pxe_tftp_root }}/pxelinux.cfg"
-    - "{{ pxe_http_root }}/fedora-live"
-    - "{{ pxe_http_root }}/ipxe"
-    - "{{ pxe_tftp_root }}/ipxe"
-    - "{{ collector_dir }}"
-    - "{{ local_artifacts_dir }}"
+- name: Mode A - Compile Stateless IPA RAMdisk Image
+  ansible.builtin.include_tasks: build-ipa.yml
+  when: build_ipa_image | default(true) | bool
 
-- name: Copy iPXE binaries from offline artifacts
-  ansible.builtin.copy:
-    src: "{{ local_artifacts_dir }}/ipxe/{{ item }}"
-    dest: "{{ pxe_tftp_root }}/ipxe/{{ item | basename }}"
-    mode: '0644'
-  loop:
-    - undionly.kpxe
-    - ipxe.efi
-    - snponly.efi
+- name: Mode B - Legacy In-Band Live OS Probing
+  block:
+    - name: Ensure target node system facts are freshly populated
+      ansible.builtin.setup:
+        gather_subset:
+          - hardware
+          - virtual
 
-- name: Copy pxelinux.0 fallback
-  ansible.builtin.copy:
-    src: "/usr/share/syslinux/pxelinux.0"
-    dest: "{{ pxe_tftp_root }}/pxelinux.0"
-    remote_src: true
-    mode: '0644'
+    - name: Load active IPMI system interface kernel modules
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - ipmi_msghandler
+        - ipmi_si
+        - ipmi_devintf
+      failed_when: false
 
-- name: Deploy dnsmasq configuration
-  ansible.builtin.template:
-    src: dnsmasq.conf.j2
-    dest: /etc/dnsmasq.conf
-    mode: '0644'
-  notify: Restart dnsmasq
+    - name: Query local BMC system interface driver for LAN topologies
+      ansible.builtin.command: ipmitool lan print 1
+      register: ipmi_lan_raw
+      changed_when: false
+      failed_when: false
 
-- name: Deploy iPXE boot script
-  ansible.builtin.template:
-    src: ipxe/boot.ipxe.j2
-    dest: "{{ pxe_http_root }}/ipxe/boot.ipxe"
-    mode: '0644'
+    - name: Parse local management channel layout metrics into temporary variables
+      ansible.builtin.set_fact:
+        local_bmc_ip: "{{ ipmi_lan_raw.stdout | regex_search('IP Address\\s+:\\s+([0-9.]+)', '\\1') | default(none, true) }}"
+        local_bmc_mac: "{{ ipmi_lan_raw.stdout | regex_search('MAC Address\\s+:\\s+([0-9a-fA-F:]+)', '\\1') | default(none, true) }}"
 
-- name: Enable and start services
-  ansible.builtin.systemd:
-    name: "{{ item }}"
-    enabled: true
-    state: started
-  loop:
-    - dnsmasq
-    - httpd
-    - lldpd
+    # --- NEW: GATHER TELEMETRY FIELD BACKLOGS FOR LIVE PROBING MODE ---
+    - name: Query UEFI Boot Order Sequence
+      ansible.builtin.shell: efibootmgr 2>/dev/null | grep -i "BootOrder" | cut -d' ' -f2 || echo "unknown"
+      register: live_boot_sequence
+      changed_when: false
+      failed_when: false
 
+    - name: Query Active UEFI Boot Target
+      ansible.builtin.shell: efibootmgr 2>/dev/null | grep -i "BootCurrent" | cut -d' ' -f2 || echo "unknown"
+      register: live_active_boot_target
+      changed_when: false
+      failed_when: false
+
+    - name: Query Processor Microcode Patch Version
+      ansible.builtin.shell: grep -m1 -i "microcode" /proc/cpuinfo | awk '{print $3}' || echo "unknown"
+      register: live_cpu_microcode
+      changed_when: false
+      failed_when: false
+
+    # --- FLUSH THE COMPLETE SYNCHRONIZED METRIC DATA PACKET TO BACKEND ---
+    - name: Stream complete unified hardware inventory report packet to permanent storage
+      ansible.builtin.uri:
+        url: "http://{{ bastion_ip | default('192.168.50.10') }}:{{ collector_port | default('5000') }}/api/inventory"
+        method: POST
+        body_format: json
+        body:
+          primary_id: "{{ ansible_facts['product_serial'] | default(ansible_facts['product_uuid']) | default('UNKNOWN') }}"
+          serial_number: "{{ ansible_facts['product_serial'] | default('UNKNOWN') }}"
+          manufacturer: "{{ ansible_facts['product_vendor'] | default('UNKNOWN') }}"
+          cpu_count: "{{ ansible_facts['processor_vcpus'] | default(0) }}"
+          ram_total_mb: "{{ ansible_facts['memtotal_mb'] | default(0) }}"
+          os_architecture: "{{ ansible_facts['architecture'] | default('UNKNOWN') }}"
+          
+          # Synced modern telemetry fields
+          boot_sequence: "{{ live_boot_sequence.stdout | trim }}"
+          active_boot_target: "{{ live_active_boot_target.stdout | trim }}"
+          cpu_microcode: "{{ live_cpu_microcode.stdout | trim }}"
+          
+          # Additive BMC metrics
+          management_ip: "{{ local_bmc_ip }}"
+          management_mac: "{{ local_bmc_mac }}"
+          discovery_method: "{{ 'In-Band IPMI' if local_bmc_ip is not none else 'Standard OS Probing' }}"
+        status_code: 200
+      changed_when: true
+  when: not (build_ipa_image | default(true) | bool)

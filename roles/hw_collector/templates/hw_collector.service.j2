@@ -1,10 +1,12 @@
 [Unit]
-Description=Hardware Inventory Collector
+Description=Hardware Collector (Gunicorn)
 After=network.target
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/python3 /opt/hardware-collector/collector.py
+User={{ collector_user }}
+Group={{ collector_group }}
+WorkingDirectory={{ collector_dir }}
+ExecStart={{ collector_venv }}/bin/gunicorn -w 2 -b 0.0.0.0:{{ collector_port }} collector:app
 Restart=always
 RestartSec=5
 

@@ -1,27 +1,80 @@
 ---
-- name: Install Flask
-  ansible.builtin.pip:
-    name: flask
+- name: Create collector group
+  ansible.builtin.group:
+    name: "{{ collector_group }}"
+    system: true
+
+- name: Create collector user
+  ansible.builtin.user:
+    name: "{{ collector_user }}"
+    group: "{{ collector_group }}"
+    system: true
+    shell: /sbin/nologin
+    home: "{{ collector_dir }}"
+
+# Securely initializes code home, raw data storage, and the web-accessible PXE nextboot directory
+- name: Create collector directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ collector_user }}"
+    group: "{{ collector_group }}"
+    mode: '0755'
+  loop:
+    - "{{ collector_dir }}" 
+    - "{{ collector_data_dir | default('/var/lib/hardware-inventory') }}"
+    - "{{ pxe_http_root | default('/var/www/html') }}/nextboot"
+
+- name: Install python3 and gunicorn (system packages)
+  ansible.builtin.package:
+    name:
+      - python3
+      - python3-pip
+      - python3-virtualenv
     state: present
 
-- name: Create collector directory
-  ansible.builtin.file:
-    path: /opt/hardware-collector
-    state: directory
-    mode: '0755'
+- name: Check if offline wheel directory exists
+  ansible.builtin.stat:
+    path: "{{ offline_wheel_dir }}"
+  register: wheel_dir_stat
 
-- name: Deploy collector app and service
+- name: Create virtualenv and install from local wheels (air-gapped mode)
+  ansible.builtin.pip:
+    name:
+      - gunicorn
+      - flask
+    virtualenv: "{{ collector_venv }}"
+    virtualenv_command: /usr/bin/python3 -m venv
+    extra_args: "--find-links {{ offline_wheel_dir }} --no-index"
+  when: wheel_dir_stat.stat.exists
+
+- name: Create virtualenv and install from PyPI (connected mode)
+  ansible.builtin.pip:
+    name:
+      - gunicorn
+      - flask
+    virtualenv: "{{ collector_venv }}"
+    virtualenv_command: /usr/bin/python3 -m venv
+  when: not wheel_dir_stat.stat.exists
+
+- name: Deploy strict collector application framework
   ansible.builtin.template:
-    src: "{{ item.src }}"
-    dest: "{{ item.dest }}"
-    mode: "{{ item.mode | default('0644') }}"
-  loop:
-    - { src: hw_collector_app.py.j2, dest: /opt/hardware-collector/collector.py, mode: '0755' }
-    - { src: hw_collector.service.j2, dest: /etc/systemd/system/hw_collector.service }
+    src: hw_collector_app.py.j2
+    dest: "{{ collector_dir }}/collector.py"
+    owner: "{{ collector_user }}"
+    group: "{{ collector_group }}"
+    mode: '0755'
+  notify: Restart hw_collector
 
-- name: Reload systemd and start collector
-  ansible.builtin.systemd:
+- name: Deploy systemd service for the collector
+  ansible.builtin.template:
+    src: hw_collector.service.j2
+    dest: /etc/systemd/system/hw_collector.service
+    mode: '0644'
+  notify: Restart hw_collector
+
+- name: Enable and start collector service
+  ansible.builtin.service:
     name: hw_collector
+    state: started
     enabled: true
-    state: restarted
-    daemon_reload: true
