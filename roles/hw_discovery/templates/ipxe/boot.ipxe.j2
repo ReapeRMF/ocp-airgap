@@ -1,50 +1,85 @@
 #!ipxe
 
+# iPXE boot menu for hardware discovery
+# Served over HTTP.
+# Parameters are passed on the kernel line to preserve /proc/cmdline context.
 set menu-timeout 30000
 set menu-default discovery
 
 menu iPXE Boot Menu - Hardware Discovery (Air-Gapped)
 
+item --gap "---------------- System Information ----------------"
+item --gap "Manufacturer: ${manufacturer}"
+item --gap "Product:      ${product}"
+item --gap "Serial/Tag:   ${serial}"
+item --gap "----------------------------------------------------"
 item discovery          Safe Discovery (No disk changes) [DEFAULT]
-item discovery-wipe     **DESTRUCTIVE** Wipe + Discovery
-item discovery-chain    Safe Discovery + Chain (stay up for next payload)
-item discovery-wipe-chain **DESTRUCTIVE** Wipe + Discovery + Chain
+item discovery-chain    Safe Discovery + Chain (stay up after collection)
+item discovery-wipe     ** DESTRUCTIVE ** Wipe + Discovery
+item discovery-wipe-chain ** DESTRUCTIVE ** Wipe + Discovery + Chain
+item --gap "----------------------------------------------------"
 item shell              iPXE Shell (for debugging)
 item reboot             Reboot
 
-choose --timeout \${menu-timeout} --default \${menu-default} selected || goto cancel
-
-goto \${selected}
+choose --timeout ${menu-timeout} --default ${menu-default} selected || goto cancel
+goto ${selected}
 
 :discovery
-    kernel http://192.168.1.185/fedora-live/vmlinuz
-    initrd http://192.168.1.185/fedora-live/initrd.img
-    boot || shell
-
-:discovery-wipe
-    kernel http://192.168.1.185/fedora-live/vmlinuz wipe=strong
-    initrd http://192.168.1.185/fedora-live/initrd.img
+    kernel http://{{ bastion_ip }}/discovery/vmlinuz
+    initrd http://{{ bastion_ip }}/discovery/initrd.img
     boot || shell
 
 :discovery-chain
-    echo Starting Safe Discovery in Chain Mode...
-    kernel http://192.168.1.185/fedora-live/vmlinuz chain=yes
-    initrd http://192.168.1.185/fedora-live/initrd.img
-    boot || chain http://192.168.1.185/ipxe/next-payload.ipxe || shell
+    echo Starting Discovery in Chain Mode...
+    kernel http://{{ bastion_ip }}/discovery/vmlinuz chain=yes
+    initrd http://{{ bastion_ip }}/discovery/initrd.img
+    boot || chain http://{{ bastion_ip }}/ipxe/next-payload.ipxe || shell
+
+:discovery-wipe
+    set target-action execution-wipe
+    goto confirm-wipe
 
 :discovery-wipe-chain
-    echo Starting DESTRUCTIVE Discovery + Chain Mode...
-    kernel http://192.168.1.185/fedora-live/vmlinuz wipe=strong chain=yes
-    initrd http://192.168.1.185/fedora-live/initrd.img
-    boot || chain http://192.168.1.185/ipxe/next-payload.ipxe || shell
+    set target-action execution-wipe-chain
+    goto confirm-wipe
+
+:confirm-wipe
+    clear selected
+    echo
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "!!! WARNING: YOU HAVE SELECTED A DESTRUCTIVE OPERATION                     !!!"
+    echo "!!! THIS WILL PERMANENTLY ERASE ALL PARTITIONS AND DATA ON TARGET DISKS.   !!!"
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo
+    menu Are you absolutely sure you want to proceed?
+    item --key n cancel-wipe  [n] No, cancel and go back to main menu
+    item --key y ${target-action} [y] Yes, I am sure. PROCEED WITH WIPE.
+    choose selected || goto cancel-wipe
+    goto ${selected}
+
+:cancel-wipe
+    echo Wipe aborted. Returning to main menu...
+    sleep 2
+    goto discovery
+
+:execution-wipe
+    kernel http://{{ bastion_ip }}/discovery/vmlinuz wipe=strong
+    initrd http://{{ bastion_ip }}/discovery/initrd.img
+    boot || shell
+
+:execution-wipe-chain
+    echo Starting DESTRUCTIVE Discovery in Chain Mode...
+    kernel http://{{ bastion_ip }}/discovery/vmlinuz wipe=strong chain=yes
+    initrd http://{{ bastion_ip }}/discovery/initrd.img
+    boot || chain http://{{ bastion_ip }}/ipxe/next-payload.ipxe || shell
 
 :shell
-    echo Dropping to iPXE shell...
+    echo Dropping to iPXE shell for debugging...
     shell
 
 :reboot
     reboot
 
 :cancel
-    echo Boot cancelled.
+    echo Boot cancelled by user.
     shell

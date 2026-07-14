@@ -1,0 +1,30 @@
+---
+# setup_bastion.yml
+# One playbook to set up the bastion for hardware discovery.
+# Run this after you have prepared the offline artifacts.
+
+- name: Set up bastion for PXE Hardware Discovery
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  roles:
+    - hw_discovery
+    - hw_collector
+
+  post_tasks:
+    - name: Show summary of what was configured
+      ansible.builtin.debug:
+        msg: |
+          Bastion setup complete.
+
+          Services running:
+            - dnsmasq (DHCP + TFTP)
+            - httpd (serves iPXE menu and discovery image)
+            - hw_collector (receives JSON reports on port {{ collector_port }})
+
+          Next steps:
+            1. Build the discovery image using the rich-discovery element.
+            2. Copy vmlinuz and initrd.img into /var/www/html/fedora-live/
+            3. Boot a test machine and choose an option from the iPXE menu.

@@ -45,6 +45,7 @@ ENV/
 *.tar.gz
 *.tar.bz2
 offline-artifacts*/
+airgap_payload/
 
 # =========================
 # Editor / OS

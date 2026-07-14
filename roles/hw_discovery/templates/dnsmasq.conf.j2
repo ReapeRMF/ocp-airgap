@@ -1,13 +1,27 @@
-interface=eno1
-dhcp-range={{ pxe_dhcp_range }},12h
+# dnsmasq configuration for PXE hardware discovery
+# Managed by Ansible role hw_discovery
+
+# Basic operation
+no-resolv
+bind-dynamic
+
+# Listen only on the provisioning interface
+interface={{ dhcp_interface }}
+
+# DHCP range for new machines
+dhcp-range={{ dhcp_range_start }},{{ dhcp_range_end }},{{ dhcp_lease_time }}
+
+# TFTP settings
 enable-tftp
 tftp-root={{ pxe_tftp_root }}
 
-# iPXE Chainloading
-dhcp-match=set:bios,option:client-arch,0
-dhcp-boot=tag:bios,ipxe/undionly.kpxe
+# Logging for troubleshooting
+log-dhcp
+log-facility=local7
 
-dhcp-match=set:uefi64,option:client-arch,7
-dhcp-boot=tag:uefi64,ipxe/ipxe.efi
+# Optional: tell clients the next server (this bastion)
+# next-server is usually set by the DHCP server itself via the filename option below
 
-dhcp-boot=pxelinux.0
+# Default boot file for UEFI machines (can be overridden per host or tag)
+# filename for legacy BIOS would be undionly.kpxe or pxelinux.0
+# We primarily use iPXE chainloading now.

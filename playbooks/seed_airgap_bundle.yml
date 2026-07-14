@@ -1,0 +1,61 @@
+---
+- name: Environment Seeding Phase (Execute While Connected to Internet)
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: true
+
+  vars:
+    # Staging directory path for compiling our payload assets
+    staging_dir: "/home/dstratfo/airgap_shipment"
+
+  tasks:
+    - name: Clean existing staging directory
+      ansible.builtin.file:
+        path: "{{ staging_dir }}"
+        state: absent
+      become: true
+
+    - name: Create staging layout directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ staging_dir }}"
+        - "{{ staging_dir }}/ansible_collections"
+        - "{{ staging_dir }}/rpm_packages"
+        - "{{ staging_dir }}/python_wheels"
+        - "{{ staging_dir }}/ipxe_binaries"
+
+    - name: Force download IPMI RPMs and dependencies
+      ansible.builtin.command: >
+        dnf download --resolve --alldeps --destdir="{{ staging_dir }}/rpm_packages" -y ipmitool OpenIPMI
+      changed_when: true
+
+    - name: Download iPXE network bootstrap PXE binary
+      ansible.builtin.get_url:
+        url: "https://boot.ipxe.org/ipxe.pxe"
+        dest: "{{ staging_dir }}/ipxe_binaries/ipxe.pxe"
+        mode: '0644'
+
+    - name: Download stable iPXE EFI multi-arch binary
+      ansible.builtin.get_url:
+        url: "https://boot.ipxe.org/x86_64-efi/snponly.efi"
+        dest: "{{ staging_dir }}/ipxe_binaries/ipxe.efi"
+        mode: '0644'
+
+    - name: Fetch and download offline Python environment wheels
+      ansible.builtin.command: >
+        pip3 download gunicorn flask -d "{{ staging_dir }}/python_wheels"
+      changed_when: true
+
+    - name: Download critical community general Ansible collections
+      ansible.builtin.command: >
+        ansible-galaxy collection download community.general -p "{{ staging_dir }}/ansible_collections"
+      changed_when: true
+
+    - name: Compress and pack complete transport payload archive
+      ansible.builtin.command: >
+        tar -czf "{{ playbook_dir }}/../airgap_bundle.tar.gz" -C "{{ staging_dir }}" .
+      changed_when: true
