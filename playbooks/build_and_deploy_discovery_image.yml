@@ -10,7 +10,7 @@
     collector_port: 5000
 
   tasks:
-    - name: Execute clean internal dynamic agent image build
+    - name: Execute internal dynamic agent image build
       ansible.builtin.include_role:
         name: hw_discovery
         tasks_from: build-ipa.yml
