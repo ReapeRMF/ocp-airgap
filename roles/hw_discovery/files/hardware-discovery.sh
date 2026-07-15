@@ -61,6 +61,11 @@ PRIMARY_ID=$(dmidecode -s system-serial-number 2>/dev/null | tr -d ' \t\r\n')
 
 MAC=$(cat /sys/class/net/*/address 2>/dev/null | grep -v '00:00:00:00:00:00' | head -1 | tr ':' '-')
 IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4; exit}' | cut -d/ -f1)
+export BMC_MANAGEMENT_IP="$BMC_MANAGEMENT_IP"
+export BMC_VENDOR="$BMC_VENDOR"
+export BMC_SELFTEST="$BMC_SELFTEST"
+export BMC_LOG_COUNT="$BMC_LOG_COUNT"
+export BMC_BOOT_NEXT="$BMC_BOOT_NEXT"
 
 python3 - <<'PY' > /var/tmp/hardware.json
 import glob
@@ -99,6 +104,13 @@ payload = {
     "chain_mode": os.environ.get("CHAIN_MODE", "no"),
     "timestamp": subprocess.check_output(["date", "-Iseconds"], text=True).strip(),
     "source": "hw-discovery",
+        "out_of_band_management": {
+        "management_ip": os.environ.get("BMC_MANAGEMENT_IP", "Unknown").strip(),
+        "vendor": os.environ.get("BMC_VENDOR", "Unknown").strip(),
+        "bmc_health_selftest": os.environ.get("BMC_SELFTEST", "Unknown").strip(),
+        "hardware_event_log_count": os.environ.get("BMC_LOG_COUNT", "0").strip(),
+        "configured_next_boot": os.environ.get("BMC_BOOT_NEXT", "Unknown").strip()
+    },
 }
 
 # System info
