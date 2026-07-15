@@ -26,6 +26,8 @@ done
 BMC_MANAGEMENT_IP="Unknown"
 BMC_VENDOR="Unknown"
 BMC_SELFTEST="Unknown"
+BMC_LOG_COUNT="0"
+BMC_BOOT_NEXT="Unknown"
 
 # Only run ipmitool if the hardware file descriptor exists
 if [ -c /dev/ipmi0 ]; then
@@ -35,6 +37,8 @@ if [ -c /dev/ipmi0 ]; then
     BMC_MANAGEMENT_IP=$(ipmitool lan print 1 2>/dev/null | grep -E "IP Address\s+:" | awk -F: '{print $2}' | xargs) || BMC_MANAGEMENT_IP="Unknown"
     BMC_VENDOR=$(ipmitool mc info 2>/dev/null | grep "Manufacturer Name" | awk -F: '{print $2}' | xargs) || BMC_VENDOR="Unknown"
     BMC_SELFTEST=$(ipmitool mc selftest 2>/dev/null | awk -F: '{print $2}' | xargs) || BMC_SELFTEST="Unknown"
+    BMC_LOG_COUNT=$(ipmitool sel info 2>/dev/null | grep "Entries" | awk -F: '{print $2}' | xargs) || BMC_LOG_COUNT="0"
+    BMC_BOOT_NEXT=$(ipmitool chassis bootparam get 5 2>/dev/null | grep "Boot Device Selector" | awk -F: '{print $2}' | xargs) || BMC_BOOT_NEXT="Unknown"
 fi
 
 echo "=== hw-discovery: installing runtime discovery service ==="
