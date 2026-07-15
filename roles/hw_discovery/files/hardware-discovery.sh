@@ -1,6 +1,42 @@
 #!/bin/bash
 set -e
 
+## ENFORCE INTERFACE INITIALIZATION FOR SLOWER MBs
+echo "[INIT] Injecting Linux Kernel OpenIPMI driver strings..."
+# Appending "|| true" ensures the script keeps moving even if drivers are built-in
+modprobe ipmi_msghandler 2>/dev/null || true
+modprobe ipmi_si 2>/dev/null || true
+modprobe ipmi_devintf 2>/dev/null || true
+
+MAX_LOOPS=10
+CURRENT_LOOP=1
+
+echo "[INIT] Polling motherboard for /dev/ipmi0 character device..."
+while [ ! -c /dev/ipmi0 ]; do
+    if [ $CURRENT_LOOP -gt $MAX_LOOPS ]; then
+        echo "[WARN] /dev/ipmi0 device failed to settle. Bypassing BMC metrics."
+        break
+    fi
+    echo "[INIT] Node not registered yet. Retrying in 1s... ($CURRENT_LOOP/$MAX_LOOPS)"
+    sleep 1
+    CURRENT_LOOP=$((CURRENT_LOOP + 1))
+done
+
+## TELEMETRY SCRAPING
+BMC_MANAGEMENT_IP="Unknown"
+BMC_VENDOR="Unknown"
+BMC_SELFTEST="Unknown"
+
+# Only run ipmitool if the hardware file descriptor exists
+if [ -c /dev/ipmi0 ]; then
+    echo "[SUCCESS] Found /dev/ipmi0 link. Gathering out-of-band metrics..."
+    
+    # Adding "|| BMC_MANAGEMENT_IP='Unknown'" intercepts failures so 'set -e' won't fire
+    BMC_MANAGEMENT_IP=$(ipmitool lan print 1 2>/dev/null | grep -E "IP Address\s+:" | awk -F: '{print $2}' | xargs) || BMC_MANAGEMENT_IP="Unknown"
+    BMC_VENDOR=$(ipmitool mc info 2>/dev/null | grep "Manufacturer Name" | awk -F: '{print $2}' | xargs) || BMC_VENDOR="Unknown"
+    BMC_SELFTEST=$(ipmitool mc selftest 2>/dev/null | awk -F: '{print $2}' | xargs) || BMC_SELFTEST="Unknown"
+fi
+
 echo "=== hw-discovery: installing runtime discovery service ==="
 
 cat > /usr/local/bin/hardware-discovery <<'SCRIPT'
