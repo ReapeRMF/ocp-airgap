@@ -1,121 +1,158 @@
-Multi-Phase Air-Gapped Bastion Lifecycle Guide
+# Bare-Metal Hardware Discovery & Telemetry Pipeline
 
-This runbook details the end-to-end process for bundling infrastructure assets, manually verifying target host filesystem execution constraints, and running the native offline deployment pipeline.
+## Bastion Infrastructure & Operations Guide
 
-                                [ ONLINE WORKSTATION ]
-                                          │
-                        1. Seed: Run playbooks/seed_airgap_bundle.yml
-                                          │
-                                          ▼
-                             [ airgap_bundle.tar.gz ]
-                                          │
-                         2. Transport via USB / Sneakernet
-                                          │
-                                          ▼
-                               [ AIR-GAPPED HARDWARE ]
-                                          │
-                        3. Unpack to an Executable Partition
-                                          │
-                                          ▼
-                        4. Verify & Deploy: Run ansible-playbook
+This guide details the end-to-end administration, execution, and troubleshooting of the air-gapped bare-metal hardware discovery pipeline.
+
+---
+
+## 1. Architecture & Data Flow
+
+When a bare-metal server is powered on, it initiates a stateless discovery loop that interfaces with the bastion services in a precise sequence:
+
+```
+[Target Server]                                                       [Bastion Host]
+      │                                                                     │
+      │─── 1. DHCP / PXE Boot Request ─────────────────────────────────────>│ (DHCPd / TFTP)
+      │<── 2. Serves iPXE Boot Menu (boot.ipxe) ────────────────────────────│ (Apache)
+      │─── 3. Pulls RAMdisk (vmlinuz & initrd.img) ────────────────────────>│ (Apache)
+      │                                                                     │
+  (Boots RAMdisk)                                                           │
+  (Gathers metrics)                                                         │
+      │                                                                     │
+      │─── 4. POSTs Hardware Telemetry (JSON) ─────────────────────────────>│ (Gunicorn / Flask)
+      │                                                                     │
+      │                                             (Writes <ID>.json to /var/lib/hardware-inventory/)
+      │                                             (Writes <ID>.ipxe to /var/www/html/nextboot/)
+      │                                                                     │
+      │<── 5. Sends API Response ("openshift_installer") ───────────────────│
+      │                                                                     │
+  (Reboots node)                                                            │
+      │                                                                     │
+      │─── 6. DHCP / PXE (Stage 2) ────────────────────────────────────────>│
+      │<── 7. Serves Dynamic Next-Boot Script (/nextboot/<ID>.ipxe) ────────│ (Boots Target Installer)
+
+```
+
+---
+
+## 2. Directory Layout Baseline
+
+All obsolete Fedora files, duplicated playbooks, and stray scripts have been purged. The production directory layout is structured as follows:
+
+| Path | Purpose | Owner / Perms |
+| --- | --- | --- |
+| `playbooks/seed_airgap_bundle.yml` | Online utility to download dependencies and wheels. | `dstratfo` (User) |
+| `playbooks/deploy_airgap_bastion.yml` | Offline baseline package setup (pip, dnf). | `dstratfo` (User) |
+| `playbooks/setup_bastion.yml` | Configures Apache, DHCP, Gunicorn, and directories. | `dstratfo` (User) |
+| `playbooks/build_and_deploy_discovery_image.yml` | Compiles the CentOS 9 IPA image & deploys iPXE menu. | `dstratfo` (User) |
+| `playbooks/hw_process_discovered.yml` | Administrative console helper to print active reports. | `dstratfo` (User) |
+| `/opt/hw-collector/` | Operational directory containing `collector.py` and venv. | `collector_user:collector_group` (0755) |
+| `/var/lib/hardware-inventory/` | Flat JSON database containing collected telemetry reports. | `collector_user:collector_group` (0755) |
+| `/var/www/html/nextboot/` | Dynamic iPXE scripts generated dynamically by the collector. | `collector_user:collector_group` (0755) |
+| `/var/www/html/discovery/` | Holds production `vmlinuz` and `initrd.img` boot assets. | `root:root` (0755) |
+
+---
+
+## 3. Standard Operating Procedures (SOPs)
+
+### SOP 101: Adding a New Target Server to Discovery
+
+To discover a brand-new physical host in the air-gapped lab:
+
+1. Ensure the target host's network management interface is wired to the provisioning network switch.
+2. Power on the target machine and enter the system BIOS/UEFI configuration.
+3. Configure the primary boot interface to **Network Boot / PXE First**.
+4. Save and reboot. The machine will load the iPXE menu and automatically timeout to run the **Safe Discovery** RAMdisk.
+
+### SOP 102: Fetching the Discovered Inventory
+
+Once the node completes its collection loop, it will gracefully reboot. To view the parsed hardware report:
+
+* **Direct Filesystem Access:**
+```bash
+cat /var/lib/hardware-inventory/<SYSTEM-SERIAL-NUMBER>.json
+
+```
 
 
-Phase 1: Online Payload Seeding (Workstation)
-
-Navigate to your project directory and explicitly isolate your Ansible environment:
-
-cd ~/ansible
+* **Unified Console Summary:**
+```bash
 export ANSIBLE_CONFIG="$HOME/ansible/ansible.cfg"
+ansible-playbook -i environments/dev/hosts playbooks/hw_process_discovered.yml
+
+```
 
 
-Compile your dynamic shipment payload archive:
 
-ansible-playbook playbooks/seed_airgap_bundle.yml
+### SOP 103: Garbage Collection (Clearing the Database)
 
+Over time, retired hardware or stale test records will clutter the telemetry directories. To flush the active database and next-boot files to start a clean discovery cycle:
 
-Confirm the payload airgap_bundle.tar.gz (~120MB) exists in the repository root before transferring it over the physical air-gap.
+```bash
+# Delete all archived hardware reports
+sudo rm -rf /var/lib/hardware-inventory/*.json
 
-Phase 2: Manual Target Host Pre-Flight Audits
+# Delete all generated dynamic target-specific iPXE scripts
+sudo rm -rf /var/www/html/nextboot/*.ipxe
 
-Before extraction, you must verify that your intended staging partition does not enforce noexec restrictions. If it does, Ansible will bail mid-run during virtualenv compilation.
+```
 
-Step 2.1: Audit the partition mount flags
+---
 
-mount | grep -E '/var|/tmp|/opt'
+## 4. Diagnostics & Troubleshooting
 
+> **Operational Warning on SELinux:**
+> If you are running SELinux in `Enforcing` mode, Apache (`httpd`) might be blocked from reading your dynamic next-boot directory or Gunicorn might be blocked from writing to `/var/www/html/nextboot/`.
+> Check your security context logs using: `sealert -a /var/log/audit/audit.log`
 
-Look for noexec within the parenthesis block. If present, the OS will block the deployment.
+### Issue 1: PXE Client Displays `Exec format error` during Boot
 
-Step 2.2: Run a definitive live execution test
+* **Root Cause:** The `boot.ipxe` file on the web server contains a shell format signature instead of the native iPXE magic header.
+* **Verification:** Run `head -n 1 /var/www/html/ipxe/boot.ipxe`. If it reads `#!/ipxe` or `#!/bin/bash`, it is invalid.
+* **Correction:** Ensure the template has exactly `#!ipxe` (no forward slash) as its first line, and redeploy using:
+```bash
+ansible -i environments/dev/hosts localhost -c local -m ansible.builtin.template -a "src=roles/hw_discovery/templates/ipxe/boot.ipxe.j2 dest=/var/www/html/ipxe/boot.ipxe mode=0644" --become --ask-become-pass
 
-TARGET_DIR="/var/tmp/airgap_payload"
-mkdir -p "$TARGET_DIR"
-echo -e '#!/bin/bash\necho "EXEC_OK"' > "$TARGET_DIR/.test.sh" && chmod +x "$TARGET_DIR/.test.sh"
-"$TARGET_DIR/.test.sh"
-
-
-If it prints EXEC_OK: The partition is safe. Proceed to Scenario A bundle extraction.
-
-If it prints Permission denied: The partition is blocked. You MUST use Scenario B.
-
-Phase 3: Extraction & Native Deployment
-
-Step 3.1: Initialize the target environment
-
-cd ~/ansible
-export ANSIBLE_CONFIG="$HOME/ansible/ansible.cfg"
+```
 
 
-Step 3.2: Unpack the payload based on your Phase 2 results
 
-Scenario A: Standard Executable mounts
+### Issue 2: Gunicorn Collector Logs Permission Failures (`Permission denied`)
 
-mkdir -p ~/ansible/airgap_payload
-tar -xzvf ./airgap_bundle.tar.gz -C ~/ansible/airgap_payload
+* **Root Cause:** Gunicorn runs as the isolated service worker user `collector_user` and lacks permissions to write to either `/var/lib/hardware-inventory/` or `/var/www/html/nextboot/`.
+* **Correction:** Run the directory synchronization block from the bastion setup playbook, or apply file permissions manually:
+```bash
+sudo chown -R collector_user:collector_group /var/lib/hardware-inventory /var/www/html/nextboot
+sudo chmod -R 0755 /var/lib/hardware-inventory /var/www/html/nextboot
 
-
-Scenario B: Hardened mounts (Home Fallback)
-
-mkdir -p ~/airgap_payload
-tar -xzvf ./airgap_bundle.tar.gz -C ~/airgap_payload
+```
 
 
-Step 3.3: Launch the native deployment playbook
 
-If you used Scenario A (repo-relative):
+### Issue 3: Target Server Boot Loops Repeatedly Back into Discovery
 
-ansible-playbook playbooks/deploy_airgap_bastion.yml
+* **Root Cause:** After discovery finishes, the node reboots and hits PXE again. If your default TFTP configuration is set to loop back to discovery, the target will loop endlessly.
+* **Verification:** Verify if a specialized next-boot file has been successfully written to `/var/www/html/nextboot/<PRIMARY_ID>.ipxe`.
+* **Correction:** Configure your primary DHCP/PXE router to inspect this next-boot chain path, allowing the host to boot its dynamic next-stage payload instead of falling back to discovery.
 
+---
 
-If you used Scenario B (hardened override):
+## 5. System Daemon Administration Reference
 
-ansible-playbook playbooks/deploy_airgap_bastion.yml -e "airgap_staging_dir=$HOME/airgap_payload"
+Keep these core management commands handy when maintaining the backend bastion services:
 
+```bash
+# View live application logs for the Flask telemetry receiver
+sudo journalctl -u hw_collector -f --no-tail
 
-Phase 4: Post-Deployment Health Checks
+# Restart the multi-worker Gunicorn web engine
+sudo systemctl restart hw_collector
 
-Run these to verify that the air-gapped network offline engines are fully active:
+# Restart the DHCP and TFTP engines
+sudo systemctl restart dhcpd tftp
 
-# 1. Verify the telemetry hardware collector daemon
-systemctl status hw_collector.service
+# Check Apache web server health
+sudo systemctl status httpd
 
-# 2. Verify the local DHCP provisioning engine
-systemctl status dhcpd.service
-
-# 3. Confirm the HTTPD engine is serving iPXE binaries offline
-curl -I http://localhost/ipxe/boot.ipxe
-
-
-Phase 5: Manual In-Band IPMI Validation (Target Discovery Node)
-
-If a discovery target host initializes but its out-of-band management endpoints fail to populate within the database report, verify the local host driver communication layer using these standard utilities:
-
-# 1. Confirm that the operating system kernel successfully registers the local KCS interface
-lsmod | grep ipmi
-
-# 2. Query the active BMC hardware map to ensure channel configuration is readable
-ipmitool lan print 1
-
-# 3. Trace hardware system errors directly from the hardware event registers
-ipmitool sel list
-
+```

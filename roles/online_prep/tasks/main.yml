@@ -1,0 +1,57 @@
+---
+- name: Prepare full airgap package (online only)
+  block:
+    - name: Clean staging directory
+      ansible.builtin.file:
+        path: "{{ staging_dir }}"
+        state: absent
+
+    - name: Create staging directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ staging_dir }}"
+        - "{{ staging_dir }}/rpm_packages"
+        - "{{ staging_dir }}/python_wheels"
+        - "{{ staging_dir }}/ansible_collections"
+        - "{{ staging_dir }}/discovery"
+
+    # Reuse seeding logic
+    - name: Download RPMs and dependencies
+      ansible.builtin.command: dnf download --resolve --alldeps --destdir="{{ staging_dir }}/rpm_packages" -y ipmitool OpenIPMI
+      changed_when: true
+
+    - name: Download iPXE binaries
+      ansible.builtin.get_url:
+        url: "https://boot.ipxe.org/ipxe.pxe"
+        dest: "{{ staging_dir }}/ipxe_binaries/ipxe.pxe"
+
+    - name: Download Python wheels
+      ansible.builtin.command: pip3 download gunicorn flask -d "{{ staging_dir }}/python_wheels"
+      changed_when: true
+
+    - name: Download Ansible collections
+      ansible.builtin.command: ansible-galaxy collection download community.general -p "{{ staging_dir }}/ansible_collections"
+      changed_when: true
+
+    # Build the IPA image
+    - name: Build CentOS Stream 9 IPA discovery image
+      ansible.builtin.include_role:
+        name: hw_discovery
+        tasks_from: build-ipa.yml
+
+    - name: Package discovery image
+      ansible.builtin.archive:
+        path: "{{ ipa_output_dir }}"
+        dest: "{{ staging_dir }}/{{ discovery_image_archive }}"
+        format: gz
+
+    - name: Create full airgap bundle
+      ansible.builtin.archive:
+        path: "{{ staging_dir }}"
+        dest: "{{ playbook_dir }}/../{{ airgap_bundle_name }}"
+        format: gz
+      changed_when: true
+  when: online_mode | default(true)

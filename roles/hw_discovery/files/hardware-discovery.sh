@@ -1,6 +1,46 @@
 #!/bin/bash
 set -e
 
+## ENFORCE INTERFACE INITIALIZATION FOR SLOWER MBs
+echo "[INIT] Injecting Linux Kernel OpenIPMI driver strings..."
+# Appending "|| true" ensures the script keeps moving even if drivers are built-in
+modprobe ipmi_msghandler 2>/dev/null || true
+modprobe ipmi_si 2>/dev/null || true
+modprobe ipmi_devintf 2>/dev/null || true
+
+MAX_LOOPS=10
+CURRENT_LOOP=1
+
+echo "[INIT] Polling motherboard for /dev/ipmi0 character device..."
+while [ ! -c /dev/ipmi0 ]; do
+    if [ $CURRENT_LOOP -gt $MAX_LOOPS ]; then
+        echo "[WARN] /dev/ipmi0 device failed to settle. Bypassing BMC metrics."
+        break
+    fi
+    echo "[INIT] Node not registered yet. Retrying in 1s... ($CURRENT_LOOP/$MAX_LOOPS)"
+    sleep 1
+    CURRENT_LOOP=$((CURRENT_LOOP + 1))
+done
+
+## TELEMETRY SCRAPING
+BMC_MANAGEMENT_IP="Unknown"
+BMC_VENDOR="Unknown"
+BMC_SELFTEST="Unknown"
+BMC_LOG_COUNT="0"
+BMC_BOOT_NEXT="Unknown"
+
+# Only run ipmitool if the hardware file descriptor exists
+if [ -c /dev/ipmi0 ]; then
+    echo "[SUCCESS] Found /dev/ipmi0 link. Gathering out-of-band metrics..."
+    
+    # Adding "|| BMC_MANAGEMENT_IP='Unknown'" intercepts failures so 'set -e' won't fire
+    BMC_MANAGEMENT_IP=$(ipmitool lan print 1 2>/dev/null | grep -E "IP Address\s+:" | awk -F: '{print $2}' | xargs) || BMC_MANAGEMENT_IP="Unknown"
+    BMC_VENDOR=$(ipmitool mc info 2>/dev/null | grep "Manufacturer Name" | awk -F: '{print $2}' | xargs) || BMC_VENDOR="Unknown"
+    BMC_SELFTEST=$(ipmitool mc selftest 2>/dev/null | awk -F: '{print $2}' | xargs) || BMC_SELFTEST="Unknown"
+    BMC_LOG_COUNT=$(ipmitool sel info 2>/dev/null | grep "Entries" | awk -F: '{print $2}' | xargs) || BMC_LOG_COUNT="0"
+    BMC_BOOT_NEXT=$(ipmitool chassis bootparam get 5 2>/dev/null | grep "Boot Device Selector" | awk -F: '{print $2}' | xargs) || BMC_BOOT_NEXT="Unknown"
+fi
+
 echo "=== hw-discovery: installing runtime discovery service ==="
 
 cat > /usr/local/bin/hardware-discovery <<'SCRIPT'
@@ -21,6 +61,11 @@ PRIMARY_ID=$(dmidecode -s system-serial-number 2>/dev/null | tr -d ' \t\r\n')
 
 MAC=$(cat /sys/class/net/*/address 2>/dev/null | grep -v '00:00:00:00:00:00' | head -1 | tr ':' '-')
 IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4; exit}' | cut -d/ -f1)
+export BMC_MANAGEMENT_IP="$BMC_MANAGEMENT_IP"
+export BMC_VENDOR="$BMC_VENDOR"
+export BMC_SELFTEST="$BMC_SELFTEST"
+export BMC_LOG_COUNT="$BMC_LOG_COUNT"
+export BMC_BOOT_NEXT="$BMC_BOOT_NEXT"
 
 python3 - <<'PY' > /var/tmp/hardware.json
 import glob
@@ -59,6 +104,13 @@ payload = {
     "chain_mode": os.environ.get("CHAIN_MODE", "no"),
     "timestamp": subprocess.check_output(["date", "-Iseconds"], text=True).strip(),
     "source": "hw-discovery",
+        "out_of_band_management": {
+        "management_ip": os.environ.get("BMC_MANAGEMENT_IP", "Unknown").strip(),
+        "vendor": os.environ.get("BMC_VENDOR", "Unknown").strip(),
+        "bmc_health_selftest": os.environ.get("BMC_SELFTEST", "Unknown").strip(),
+        "hardware_event_log_count": os.environ.get("BMC_LOG_COUNT", "0").strip(),
+        "configured_next_boot": os.environ.get("BMC_BOOT_NEXT", "Unknown").strip()
+    },
 }
 
 # System info
