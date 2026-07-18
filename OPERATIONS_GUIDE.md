@@ -38,7 +38,7 @@ When a bare-metal server is powered on, it initiates a stateless discovery loop 
 
 ## 2. Directory Layout Baseline
 
-All obsolete Fedora files, duplicated playbooks, and stray scripts have been purged. The production directory layout is structured as follows:
+The production directory layout is structured as follows:
 
 | Path | Purpose | Owner / Perms |
 | --- | --- | --- |
