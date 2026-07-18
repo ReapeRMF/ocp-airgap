@@ -1,0 +1,5 @@
+---
+# defaults for online_prep role
+staging_dir: "/tmp/airgap_staging"
+airgap_bundle_name: "airgap_bundle.tar.gz"
+discovery_image_archive: "discovery_image.tar.gz"
