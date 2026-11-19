@@ -8,6 +8,9 @@
     ipa_output_dir: "/var/www/html/discovery"
     bastion_ip: "{{ ansible_default_ipv4.address | default('192.168.50.10') }}"
     collector_port: 5000
+    # This play calls build-ipa.yml directly. The flag documents that intent
+    # for anything else in the role that consults it.
+    build_ipa_image: true
 
   tasks:
     - name: Execute internal dynamic agent image build

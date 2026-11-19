@@ -19,9 +19,10 @@ Each entry in `.ansible-lint-ignore` uses the `skip` qualifier so these known de
 
 | Path | Rule | Why |
 | --- | --- | --- |
-| `roles/hw_discovery/defaults/main.yml` | `var-naming[no-role-prefix]` | Inventory, playbooks, and templates set `bastion_ip`, `collector_port`, `dhcp_*`, and `pxe_*` with no role prefix. |
+| `roles/hw_discovery/defaults/main.yml` | `var-naming[no-role-prefix]` | Inventory, playbooks, and templates set `bastion_ip`, `collector_port`, `build_ipa_image`, and `pxe_*` with no role prefix. |
 | `roles/hw_collector/defaults/main.yml` | `var-naming[no-role-prefix]` | Same contract for `collector_user`, `collector_dir`, `collector_port`, and `offline_wheel_dir`. |
-| `roles/online_prep/defaults/main.yml` | `var-naming[no-role-prefix]` | `staging_dir` and the bundle names are the role's public inputs. |
+
+The `online_prep` role was removed. Seeding is `playbooks/seed_airgap_bundle.yml`.
 
 Internal names now use a role prefix: `hw_collector_wheel_dir_stat`,
 `hw_discovery_ipmi_lan_raw`, `hw_discovery_local_bmc_ip`,
@@ -39,25 +40,13 @@ Internal names now use a role prefix: `hw_collector_wheel_dir_stat`,
 
 These were not "fixed" by flipping a default. Each one needs an owner decision.
 
-### PXE variables disagree, and only one file is loaded
+### PXE variables
 
-`environments/dev/all.yml` and `environments/dev/group_vars/all.yml` set the same keys to different networks:
+`environments/dev/all.yml` was not loaded by Ansible and has been deleted. The loaded file is `environments/dev/group_vars/all.yml` (`192.168.1.0/24`, bastion `192.168.1.185`).
 
-| Key | `environments/dev/all.yml` (not auto-loaded) | `environments/dev/group_vars/all.yml` (loaded) |
-| --- | --- | --- |
-| `pxe_subnet` | `192.168.50.0/24` | `192.168.1.0/24` |
-| `pxe_dhcp_range` | `192.168.50.100,192.168.50.200` | `192.168.1.100,192.168.1.200` |
-| `bastion_ip` | `ansible_default_ipv4` or `192.168.50.10` | `192.168.1.185` |
-| `collector_dir` | `/var/lib/hardware-inventory` | `/opt/hw-collector` |
+No task ever rendered `dhcpd.conf.j2` or `dnsmasq.conf.j2`, so this repository does not serve DHCP. Those templates, the unused pxelinux template, and the dnsmasq/dhcpd handlers were removed rather than inventing a DHCP service. `pxe_subnet` and `pxe_dhcp_range` remain in group_vars as the lab network record. `local_artifacts_dir` was renamed to `offline_artifacts_dir`, which is the name the role reads. The path is still `/opt/offline-artifacts-x86_64`.
 
-Inventory is `environments/dev/hosts`, so Ansible loads `environments/dev/group_vars/all.yml` only. `environments/dev/all.yml` is an ordinary file in that directory. Nothing in this change copies values from one file to the other.
-
-Two related mismatches, also left as-is:
-
-- No task renders `roles/hw_discovery/templates/dhcpd.conf.j2` or `dnsmasq.conf.j2`. Ansible does not configure DHCP or TFTP. `pxe_subnet` and `pxe_dhcp_range` are unused. The role defaults `dhcp_subnet` and `dhcp_range_*` are also unused. `setup_bastion.yml` does not claim dnsmasq is running.
-- Group vars set `local_artifacts_dir`. The discovery role reads `offline_artifacts_dir`.
-- `playbooks/build_and_deploy_discovery_image.yml` sets `bastion_ip` to the host's default IPv4 or `192.168.50.10`, which overrides group_vars for that play only.
-- `roles/hw_discovery/files/hardware-discovery.sh` posts to `http://192.168.1.185:5000`. No playbook copies that file. The IPA element embedded in `roles/hw_discovery/tasks/build-ipa.yml` uses `{{ bastion_ip }}` and `{{ collector_port }}`.
+`playbooks/build_and_deploy_discovery_image.yml` still sets `bastion_ip` to the host address or `192.168.50.10` for that play only.
 
 ### GPG verification is still disabled for air-gap RPMs
 
@@ -77,36 +66,34 @@ ansible-playbook playbooks/seed_airgap_bundle.yml \
   -e ipxe_efi_checksum='sha256:<hex>'
 ```
 
-`online_prep` honors `ipxe_pxe_checksum` the same way. It still downloads only `ipxe.pxe`, not the EFI binary the seed playbook downloads. No playbook includes the `online_prep` role; `playbooks/seed_airgap_bundle.yml` is the wired seeding entrypoint. The role's collection download uses `playbook_dir/../requirements.yml`, which is the repo root when the playbook lives in `playbooks/`.
+The seed playbook is the only seeding entrypoint.
 
 ### Hardcoded path, not a credential
 
 `seed_airgap_bundle.yml` still defaults `staging_dir` to `/home/dstratfo/airgap_shipment`. Override with `-e seed_staging_dir=...`. No passwords, tokens, or API keys are committed. gitleaks covers that in CI.
 
-`ansible.cfg` sets `host_key_checking = False`. Left unchanged. The discovery plays are localhost, but `hw_process_discovered.yml` does not force `connection: local`.
+`ansible.cfg` sets `host_key_checking = False`. `environments/dev/hosts` sets `ansible_connection=local` for localhost, and the bogus `ENV=environments/dev` host line is gone.
 
 ### Collector API has no authentication
 
 `roles/hw_collector/templates/hw_collector_app.py.j2` accepts unauthenticated POSTs on `0.0.0.0:{{ collector_port }}` and uses `primary_id` in a file path. Adding auth or path sanitizing would change the discovery protocol. Not done here.
 
-### IPA image rebuilds whenever the discovery role runs
+### IPA image build
 
-`roles/hw_discovery/tasks/main.yml` includes `build-ipa.yml` when `build_ipa_image` is true, and that default is `true`. `playbooks/setup_bastion.yml` therefore deletes previous IPA artifacts and rebuilds the image. `changed_when: true` on the builder records that the task is not a no-op. Set `-e build_ipa_image=false` to configure services without rebuilding. The default was not changed.
-
-`build-ipa.yml` also deletes `~/.cache/ipa-build/ipa-hw-discovery*` before every build, so that task cannot be idempotent.
+`build_ipa_image` defaults to false, so `setup_bastion.yml` does not rebuild the image. It also does not fall through into in-band probing; that runs only when `inband_discovery` is true. The image playbook calls `build-ipa.yml` directly. That task still deletes `~/.cache/ipa-build/ipa-hw-discovery*` before every build.
 
 ### Missing iPXE binaries do not fail the deploy
 
 `deploy_airgap_bastion.yml` copies `ipxe.pxe` and `ipxe.efi` with `failed_when: false`. A missing file still ends the play as success. Change that only if every air-gap bundle is known to contain both binaries.
 
-### BMC values in `hardware-discovery.sh` do not reach the generated script
+### Discovery script
 
-The script collects `BMC_*` metrics, then writes `/usr/local/bin/hardware-discovery` from a quoted heredoc (`<<'SCRIPT'`). The quoted heredoc does not expand those variables, so the generated script's BMC fields stay empty. The values are exported so shellcheck can see they are intentional. They are not substituted into the heredoc. No playbook invokes this file; the image build uses the script embedded in `build-ipa.yml`.
+`roles/hw_discovery/files/hardware-discovery.sh` was not copied by any task and hardcoded `192.168.1.185`. It was deleted. The image build uses the script embedded in `build-ipa.yml`. The unused `online_prep` role was deleted as well.
 
 ### In-band probe fallback now actually returns `unknown`
 
-The live-probe shell tasks already ended with `|| echo "unknown"`. Without `pipefail`, `cut`/`awk` exit 0 on empty input, so the fallback never ran and the report got an empty string. They now use `set -o pipefail` under `/bin/bash`. A failed `efibootmgr` or microcode grep records `unknown`. This applies only when `build_ipa_image` is false.
+The live-probe shell tasks already ended with `|| echo "unknown"`. Without `pipefail`, `cut`/`awk` exit 0 on empty input, so the fallback never ran and the report got an empty string. They now use `set -o pipefail` under `/bin/bash`. A failed `efibootmgr` or microcode grep records `unknown`. This applies only when `inband_discovery` is true.
 
 ## Collection pin
 
-`requirements.yml` pins `community.general` `11.4.10` (`requires_ansible: >=2.16.0`). The seed playbook and `online_prep` download that file instead of an unpinned `community.general`, which currently resolves to a release that needs ansible-core >= 2.19.
+`requirements.yml` pins `community.general` `11.4.10` (`requires_ansible: >=2.16.0`). The seed playbook downloads that file instead of an unpinned `community.general`, which currently resolves to a release that needs ansible-core >= 2.19.

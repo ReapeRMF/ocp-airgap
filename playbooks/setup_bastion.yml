@@ -19,11 +19,15 @@
         msg: |
           Bastion setup complete.
 
-          This playbook does not start DHCP or TFTP. Nothing renders
-          dhcpd.conf.j2 or dnsmasq.conf.j2.
+          This playbook does not configure DHCP or TFTP and does not
+          build the discovery image.
 
           Service this playbook enables:
             - hw_collector (receives JSON reports on port {{ collector_port }})
+
+          Build the image with playbooks/build_and_deploy_discovery_image.yml.
+          Pass -e build_ipa_image=true to build from this play, or
+          -e inband_discovery=true to probe this host instead.
 
           Next steps:
             1. Build the discovery image using the rich-discovery element.

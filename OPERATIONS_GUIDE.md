@@ -1,5 +1,7 @@
 # Bare-Metal Hardware Discovery & Telemetry Pipeline
 
+Ansible in this repository does not configure DHCP or TFTP. `setup_bastion.yml` installs the collector. `build_and_deploy_discovery_image.yml` builds the IPA image and writes the iPXE menu. A DHCP daemon on the bastion, if you run one, is administered outside these playbooks.
+
 ## Bastion Infrastructure & Operations Guide
 
 This guide details the end-to-end administration, execution, and troubleshooting of the air-gapped bare-metal hardware discovery pipeline.

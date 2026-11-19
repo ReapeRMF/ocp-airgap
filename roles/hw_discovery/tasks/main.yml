@@ -2,11 +2,11 @@
 # roles/hw_discovery/tasks/main.yml
 
 - name: Mode A - Compile Stateless IPA RAMdisk Image
-  when: build_ipa_image | default(true) | bool
+  when: build_ipa_image | default(false) | bool
   ansible.builtin.include_tasks: build-ipa.yml
 
 - name: Mode B - Legacy In-Band Live OS Probing
-  when: not (build_ipa_image | default(true) | bool)
+  when: inband_discovery | default(false) | bool
   block:
     - name: Ensure target node system facts are freshly populated
       ansible.builtin.setup:

@@ -2,25 +2,19 @@
 # hw_discovery role defaults
 # These are the values used if not overridden in group_vars or host_vars.
 
-pxe_tftp_root: /var/lib/tftpboot
 pxe_http_root: /var/www/html
 ipa_output_dir: "{{ pxe_http_root }}/discovery"
 collector_port: 5000
 collector_dir: /var/lib/hardware-inventory
 bastion_ip: "{{ ansible_default_ipv4.address | default('192.168.50.10') }}"
 
-# DHCP settings - change these for your network
-dhcp_interface: eno1
-dhcp_range_start: 192.168.50.100
-dhcp_range_end: 192.168.50.200
-dhcp_subnet: 192.168.50.0
-dhcp_netmask: 255.255.255.0
-dhcp_lease_time: 12h
+# Image builds run from build_and_deploy_discovery_image.yml, which calls
+# build-ipa.yml directly. setup_bastion does not rebuild unless this is true.
+build_ipa_image: false
+
+# In-band probing is separate from "do not build an image".
+# setup_bastion does not probe the bastion unless this is true.
+inband_discovery: false
 
 # Where the prepared offline artifacts live after extraction
 offline_artifacts_dir: /opt/offline-artifacts-x86_64
-
-# DHCP backend. Supported values: "isc" (default) or "dnsmasq"
-# ISC DHCP (dhcpd) + tftp-server is what ultimately worked reliably in testing.
-# dnsmasq is kept as an alternative (simpler, single process) but had more issues.
-dhcp_backend: isc

@@ -5,4 +5,3 @@
 # See docs/lint-exceptions.md.
 roles/hw_collector/defaults/main.yml var-naming[no-role-prefix] skip
 roles/hw_discovery/defaults/main.yml var-naming[no-role-prefix] skip
-roles/online_prep/defaults/main.yml var-naming[no-role-prefix] skip
