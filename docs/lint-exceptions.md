@@ -59,25 +59,9 @@ Two related mismatches, also left as-is:
 - `playbooks/build_and_deploy_discovery_image.yml` sets `bastion_ip` to the host's default IPv4 or `192.168.50.10`, which overrides group_vars for that play only.
 - `roles/hw_discovery/files/hardware-discovery.sh` posts to `http://192.168.1.185:5000`. No playbook copies that file. The IPA element embedded in `roles/hw_discovery/tasks/build-ipa.yml` uses `{{ bastion_ip }}` and `{{ collector_port }}`.
 
-### GPG verification is still disabled for air-gap RPMs
+### GPG verification and iPXE checksums
 
-`playbooks/deploy_airgap_bastion.yml` installs local RPMs with `disable_gpg_check: "{{ airgap_disable_gpg_check | default(true) | bool }}"`. The value lives in `environments/dev/group_vars/all.yml` (still `true`), so inventory can override it. A play var cannot, because play vars outrank group_vars. Turn it off only after the bastion has the keys that signed the packages downloaded on the online host:
-
-```bash
-ansible-playbook playbooks/deploy_airgap_bastion.yml -e airgap_disable_gpg_check=false
-```
-
-### iPXE downloads have no checksum until one is supplied
-
-`https://boot.ipxe.org/ipxe.pxe` and `https://boot.ipxe.org/x86_64-efi/snponly.efi` are rolling URLs. No checksum is committed, because a stale hash would fail the next seed. `get_url` accepts one when the owner pins a build:
-
-```bash
-ansible-playbook playbooks/seed_airgap_bundle.yml \
-  -e ipxe_pxe_checksum='sha256:<hex>' \
-  -e ipxe_efi_checksum='sha256:<hex>'
-```
-
-`online_prep` honors `ipxe_pxe_checksum` the same way. It still downloads only `ipxe.pxe`, not the EFI binary the seed playbook downloads. No playbook includes the `online_prep` role; `playbooks/seed_airgap_bundle.yml` is the wired seeding entrypoint. The role's collection download uses `playbook_dir/../requirements.yml`, which is the repo root when the playbook lives in `playbooks/`.
+`airgap_disable_gpg_check` defaults to `false`. The seed playbook ships RPM signing keys and a `SHA256SUMS` manifest. iPXE downloads require the checksums in `vars/ipxe_checksums.yml` unless `-e allow_unverified_ipxe=true`. The bastion deploy fails if `ipxe.pxe` or `ipxe.efi` is missing. Details are in `docs/security.md`.
 
 ### Hardcoded path, not a credential
 
@@ -85,9 +69,9 @@ ansible-playbook playbooks/seed_airgap_bundle.yml \
 
 `ansible.cfg` sets `host_key_checking = False`. Left unchanged. The discovery plays are localhost, but `hw_process_discovered.yml` does not force `connection: local`.
 
-### Collector API has no authentication
+### Collector authentication
 
-`roles/hw_collector/templates/hw_collector_app.py.j2` accepts unauthenticated POSTs on `0.0.0.0:{{ collector_port }}` and uses `primary_id` in a file path. Adding auth or path sanitizing would change the discovery protocol. Not done here.
+The collector requires a bearer token, rejects path traversal in `primary_id`, binds to `bastion_ip`, and limits the port with firewalld. See `docs/security.md`.
 
 ### IPA image rebuilds whenever the discovery role runs
 
@@ -95,9 +79,9 @@ ansible-playbook playbooks/seed_airgap_bundle.yml \
 
 `build-ipa.yml` also deletes `~/.cache/ipa-build/ipa-hw-discovery*` before every build, so that task cannot be idempotent.
 
-### Missing iPXE binaries do not fail the deploy
+### Missing iPXE binaries fail the deploy
 
-`deploy_airgap_bastion.yml` copies `ipxe.pxe` and `ipxe.efi` with `failed_when: false`. A missing file still ends the play as success. Change that only if every air-gap bundle is known to contain both binaries.
+`deploy_airgap_bastion.yml` stats `ipxe.pxe` and `ipxe.efi` and asserts that both exist before copying them.
 
 ### BMC values in `hardware-discovery.sh` do not reach the generated script
 

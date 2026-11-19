@@ -28,13 +28,25 @@
         -y ipmitool OpenIPMI
       changed_when: true
 
-    # Checksum is optional. See ipxe_pxe_checksum in docs/lint-exceptions.md.
+    - name: Load pinned iPXE checksums
+      ansible.builtin.include_vars:
+        file: "{{ role_path }}/../../vars/ipxe_checksums.yml"
+
+    - name: Require pinned iPXE checksums
+      ansible.builtin.assert:
+        that:
+          - ipxe_pxe_checksum | default('') | length > 0
+        fail_msg: >-
+          ipxe_pxe_checksum is required. See vars/ipxe_checksums.yml.
+          Pass -e allow_unverified_ipxe=true only when you accept a rolling binary.
+      when: not (allow_unverified_ipxe | default(false) | bool)
+
     - name: Download iPXE binaries
       ansible.builtin.get_url:
-        url: "https://boot.ipxe.org/ipxe.pxe"
+        url: "{{ ipxe_pxe_url }}"
         dest: "{{ staging_dir }}/ipxe_binaries/ipxe.pxe"
         mode: '0644'
-        checksum: "{{ ipxe_pxe_checksum | default(omit) }}"
+        checksum: "{{ omit if (allow_unverified_ipxe | default(false) | bool) else ipxe_pxe_checksum }}"
 
     - name: Download Python wheels
       ansible.builtin.command: >-

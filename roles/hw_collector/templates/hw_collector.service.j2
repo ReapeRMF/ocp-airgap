@@ -6,7 +6,13 @@ After=network.target
 User={{ collector_user }}
 Group={{ collector_group }}
 WorkingDirectory={{ collector_dir }}
-ExecStart={{ collector_venv }}/bin/gunicorn -w 2 -b 0.0.0.0:{{ collector_port }} collector:app
+Environment=COLLECTOR_INVENTORY_DIR={{ collector_data_dir | default('/var/lib/hardware-inventory') }}
+Environment=COLLECTOR_NEXTBOOT_DIR={{ pxe_http_root | default('/var/www/html') }}/nextboot
+Environment=COLLECTOR_TOKEN_FILE={{ collector_token_path }}
+Environment=COLLECTOR_MAX_BODY_BYTES={{ collector_max_body_bytes }}
+Environment=COLLECTOR_OVERWRITE_NEXTBOOT={{ collector_overwrite_nextboot | bool | ternary('true', 'false') }}
+Environment=COLLECTOR_BASTION_IP={{ bastion_ip }}
+ExecStart={{ collector_venv }}/bin/gunicorn -w 2 -b {{ bastion_ip }}:{{ collector_port }} collector_app:app
 Restart=always
 RestartSec=5
 

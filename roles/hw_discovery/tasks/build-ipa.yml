@@ -186,8 +186,15 @@
       JSON
 
       echo ">>> Pushing hardware telemetry report to collector..."
+      COLLECTOR_TOKEN=""
+      for arg in $(cat /proc/cmdline); do
+        case "$arg" in
+          collector_token=*) COLLECTOR_TOKEN="${arg#collector_token=}" ;;
+        esac
+      done
       curl -sS --connect-timeout 5 --max-time 15 \
         -X POST -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${COLLECTOR_TOKEN}" \
         --data @/var/tmp/hardware.json \
         "http://{{ bastion_ip }}:{{ collector_port }}/api/inventory" \
         || echo "WARNING: Could not reach collector"

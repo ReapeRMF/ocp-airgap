@@ -1,0 +1,56 @@
+---
+# Create or reuse the collector bearer token. The value is never committed.
+- name: Ensure collector token directory exists
+  ansible.builtin.file:
+    path: "{{ collector_token_path | dirname }}"
+    state: directory
+    owner: root
+    group: "{{ collector_group }}"
+    mode: "0750"
+
+- name: Check for an existing collector token
+  ansible.builtin.stat:
+    path: "{{ collector_token_path }}"
+  register: hw_collector_token_stat
+
+- name: Generate and install a collector token
+  when:
+    - collector_auth_token | default('') | length == 0
+    - not hw_collector_token_stat.stat.exists
+  block:
+    - name: Generate a collector token
+      ansible.builtin.command:
+        cmd: python3 -c 'import secrets; print(secrets.token_hex(32))'
+      register: hw_collector_token_generated
+      changed_when: true
+      no_log: true
+
+    - name: Install the generated collector token
+      ansible.builtin.copy:
+        dest: "{{ collector_token_path }}"
+        content: "{{ hw_collector_token_generated.stdout }}\n"
+        owner: root
+        group: "{{ collector_group }}"
+        mode: "0640"
+      no_log: true
+
+- name: Install a collector token supplied by vars
+  ansible.builtin.copy:
+    dest: "{{ collector_token_path }}"
+    content: "{{ collector_auth_token }}\n"
+    owner: root
+    group: "{{ collector_group }}"
+    mode: "0640"
+  no_log: true
+  when: collector_auth_token | default('') | length > 0
+
+- name: Load the collector token for templates
+  ansible.builtin.slurp:
+    src: "{{ collector_token_path }}"
+  register: hw_collector_token_slurp
+  no_log: true
+
+- name: Publish the collector token fact
+  ansible.builtin.set_fact:
+    hw_collector_auth_token: "{{ hw_collector_token_slurp.content | b64decode | trim }}"
+  no_log: true

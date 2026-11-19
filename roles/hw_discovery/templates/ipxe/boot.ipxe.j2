@@ -5,6 +5,7 @@
 # Parameters are passed on the kernel line to preserve /proc/cmdline context.
 set menu-timeout 30000
 set menu-default discovery
+set collector-token {{ hw_collector_auth_token }}
 
 menu iPXE Boot Menu - Hardware Discovery (Air-Gapped)
 
@@ -25,13 +26,13 @@ choose --timeout ${menu-timeout} --default ${menu-default} selected || goto canc
 goto ${selected}
 
 :discovery
-    kernel http://{{ bastion_ip }}/discovery/vmlinuz
+    kernel http://{{ bastion_ip }}/discovery/vmlinuz collector_token=${collector-token}
     initrd http://{{ bastion_ip }}/discovery/initrd.img
     boot || shell
 
 :discovery-chain
     echo Starting Discovery in Chain Mode...
-    kernel http://{{ bastion_ip }}/discovery/vmlinuz chain=yes
+    kernel http://{{ bastion_ip }}/discovery/vmlinuz collector_token=${collector-token} chain=yes
     initrd http://{{ bastion_ip }}/discovery/initrd.img
     boot || chain http://{{ bastion_ip }}/ipxe/next-payload.ipxe || shell
 
@@ -63,13 +64,13 @@ goto ${selected}
     goto discovery
 
 :execution-wipe
-    kernel http://{{ bastion_ip }}/discovery/vmlinuz wipe=strong
+    kernel http://{{ bastion_ip }}/discovery/vmlinuz collector_token=${collector-token} wipe=strong
     initrd http://{{ bastion_ip }}/discovery/initrd.img
     boot || shell
 
 :execution-wipe-chain
     echo Starting DESTRUCTIVE Discovery in Chain Mode...
-    kernel http://{{ bastion_ip }}/discovery/vmlinuz wipe=strong chain=yes
+    kernel http://{{ bastion_ip }}/discovery/vmlinuz collector_token=${collector-token} wipe=strong chain=yes
     initrd http://{{ bastion_ip }}/discovery/initrd.img
     boot || chain http://{{ bastion_ip }}/ipxe/next-payload.ipxe || shell
 

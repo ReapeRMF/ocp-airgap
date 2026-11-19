@@ -4,6 +4,8 @@
   connection: local
   become: false
   gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../vars/ipxe_checksums.yml"
 
   vars:
     # Historical default is a specific user home. Override with -e seed_staging_dir=...
@@ -27,27 +29,70 @@
         - "{{ staging_dir }}/rpm_packages"
         - "{{ staging_dir }}/python_wheels"
         - "{{ staging_dir }}/ipxe_binaries"
+        - "{{ staging_dir }}/rpm_gpg_keys"
+
+    - name: Require pinned iPXE checksums
+      ansible.builtin.assert:
+        that:
+          - ipxe_pxe_checksum | default('') | length > 0
+          - ipxe_efi_checksum | default('') | length > 0
+        fail_msg: >-
+          ipxe_pxe_checksum and ipxe_efi_checksum are required.
+          They live in vars/ipxe_checksums.yml.
+          Pass -e allow_unverified_ipxe=true only when you accept rolling binaries.
+      when: not (allow_unverified_ipxe | default(false) | bool)
 
     - name: Force download IPMI RPMs and dependencies
       ansible.builtin.command: >
         dnf download --resolve --alldeps --destdir="{{ staging_dir }}/rpm_packages" -y ipmitool OpenIPMI
       changed_when: true
 
-    # boot.ipxe.org publishes rolling binaries with no pinned checksum in this repo.
-    # Pass -e ipxe_pxe_checksum=sha256:<hex> (and ipxe_efi_checksum) to verify them.
     - name: Download iPXE network bootstrap PXE binary
       ansible.builtin.get_url:
-        url: "https://boot.ipxe.org/ipxe.pxe"
+        url: "{{ ipxe_pxe_url }}"
         dest: "{{ staging_dir }}/ipxe_binaries/ipxe.pxe"
         mode: '0644'
-        checksum: "{{ ipxe_pxe_checksum | default(omit) }}"
+        checksum: "{{ omit if (allow_unverified_ipxe | default(false) | bool) else ipxe_pxe_checksum }}"
 
     - name: Download stable iPXE EFI multi-arch binary
       ansible.builtin.get_url:
-        url: "https://boot.ipxe.org/x86_64-efi/snponly.efi"
+        url: "{{ ipxe_efi_url }}"
         dest: "{{ staging_dir }}/ipxe_binaries/ipxe.efi"
         mode: '0644'
-        checksum: "{{ ipxe_efi_checksum | default(omit) }}"
+        checksum: "{{ omit if (allow_unverified_ipxe | default(false) | bool) else ipxe_efi_checksum }}"
+
+    - name: Check the online host RPM signing-key directory
+      ansible.builtin.stat:
+        path: /etc/pki/rpm-gpg
+      register: seed_gpg_dir
+
+    - name: Require RPM signing keys from the online host
+      ansible.builtin.assert:
+        that:
+          - seed_gpg_dir.stat.isdir | default(false)
+        fail_msg: >-
+          /etc/pki/rpm-gpg is missing. Run this playbook on the online host
+          whose keys signed the RPMs you are about to download.
+
+    - name: Find RPM signing keys
+      ansible.builtin.find:
+        paths: /etc/pki/rpm-gpg
+        patterns: "RPM-GPG-KEY-*"
+        file_type: file
+      register: seed_gpg_keys
+
+    - name: Require at least one RPM signing key
+      ansible.builtin.assert:
+        that:
+          - seed_gpg_keys.matched > 0
+        fail_msg: "No RPM-GPG-KEY-* files were found in /etc/pki/rpm-gpg."
+
+    - name: Copy RPM signing keys into the bundle
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ staging_dir }}/rpm_gpg_keys/{{ item.path | basename }}"
+        mode: "0644"
+      loop: "{{ seed_gpg_keys.files }}"
 
     - name: Fetch and download offline Python environment wheels
       ansible.builtin.command: >
@@ -61,9 +106,27 @@
         -p "{{ staging_dir }}/ansible_collections"
       changed_when: true
 
+    - name: Write SHA256SUMS for the staged bundle
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          cd "{{ staging_dir }}"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+        executable: /bin/bash
+      changed_when: true
+
     # tar -C dir . stores contents at the archive root. community.general.archive
     # nests paths differently, and unarchive only extracts.
     - name: Compress and pack complete transport payload archive  # noqa: command-instead-of-module
       ansible.builtin.command: >-
         tar -czf "{{ playbook_dir }}/../airgap_bundle.tar.gz" -C "{{ staging_dir }}" .
+      changed_when: true
+
+    - name: Write the transport archive checksum
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          cd "{{ playbook_dir }}/.."
+          sha256sum airgap_bundle.tar.gz > airgap_bundle.tar.gz.sha256
+        executable: /bin/bash
       changed_when: true

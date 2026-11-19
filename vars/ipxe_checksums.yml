@@ -1,0 +1,8 @@
+---
+# SHA256 of the boot.ipxe.org builds fetched on 2026-11-19.
+# Those URLs are rolling. When upstream changes, seed fails until these
+# checksums are updated. Pass -e allow_unverified_ipxe=true only to bypass.
+ipxe_pxe_url: "https://boot.ipxe.org/ipxe.pxe"
+ipxe_efi_url: "https://boot.ipxe.org/x86_64-efi/snponly.efi"
+ipxe_pxe_checksum: "sha256:8f2390b276a0c46906d1f540daa059607c9ae651519a6f83db4ccce208905ce3"
+ipxe_efi_checksum: "sha256:1ae3d72db3c5c0a3e45e34b7bab3d261d69b8f46593f82e1dc99dd5105f1f71f"

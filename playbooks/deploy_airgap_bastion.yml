@@ -27,7 +27,9 @@
     - name: Find local archived Ansible collections
       ansible.builtin.find:
         paths: "{{ airgap_staging_dir }}/ansible_collections"
-        patterns: "community-general-*.tar.gz"
+        patterns:
+          - "community-general-*.tar.gz"
+          - "ansible-posix-*.tar.gz"
       register: collection_archive
       become: false
 
@@ -61,13 +63,39 @@
             | list
           }}
 
+    - name: Verify the staged bundle against SHA256SUMS
+      ansible.builtin.command: sha256sum -c SHA256SUMS
+      args:
+        chdir: "{{ airgap_staging_dir }}"
+      changed_when: false
+      check_mode: false
+
+    - name: Find bundled RPM signing keys
+      ansible.builtin.find:
+        paths: "{{ airgap_staging_dir }}/rpm_gpg_keys"
+        patterns: "RPM-GPG-KEY-*"
+      register: deploy_gpg_keys
+
+    - name: Require bundled RPM signing keys
+      ansible.builtin.assert:
+        that:
+          - deploy_gpg_keys.matched > 0
+        fail_msg: >-
+          The air-gap bundle has no rpm_gpg_keys. Re-run seed_airgap_bundle.yml
+          so the bastion can verify RPM signatures.
+
+    - name: Import bundled RPM signing keys
+      ansible.builtin.rpm_key:
+        key: "{{ item.path }}"
+        state: present
+      loop: "{{ deploy_gpg_keys.files }}"
+
     - name: Install host system dependencies concurrently via batch DNF
       ansible.builtin.dnf:
         name: "{{ install_rpms }}"
         state: present
-        # Group/host vars can override this. A play var would hide inventory.
-        # Default stays true until signing keys are imported with the bundle.
-        disable_gpg_check: "{{ airgap_disable_gpg_check | default(true) | bool }}"
+        # Group vars and -e can override this. Default is verify signatures.
+        disable_gpg_check: "{{ airgap_disable_gpg_check | default(false) | bool }}"
 
     - name: Create baseline directory structure for boot files and inventory
       ansible.builtin.file:
@@ -78,6 +106,23 @@
         - "/var/lib/hardware-inventory"
         - "/var/www/html/ipxe"
 
+    - name: Check iPXE bootstrap binaries from the bundle
+      ansible.builtin.stat:
+        path: "{{ airgap_staging_dir }}/ipxe_binaries/{{ item }}"
+      loop:
+        - ipxe.pxe
+        - ipxe.efi
+      register: deploy_ipxe_stats
+
+    - name: Require both iPXE bootstrap binaries
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: >-
+          Missing {{ item.item }} under {{ airgap_staging_dir }}/ipxe_binaries.
+          Re-run seed_airgap_bundle.yml so the bundle contains ipxe.pxe and ipxe.efi.
+      loop: "{{ deploy_ipxe_stats.results }}"
+
     - name: Copy stable bootstrap binaries to local TFTP/HTTP roots
       ansible.builtin.copy:
         src: "{{ airgap_staging_dir }}/ipxe_binaries/{{ item }}"
@@ -86,6 +131,3 @@
       loop:
         - "ipxe.pxe"
         - "ipxe.efi"
-      # Historical behavior: a missing binary does not fail the play.
-      # Owner decision: fail closed once every bundle is known to contain both files.
-      failed_when: false

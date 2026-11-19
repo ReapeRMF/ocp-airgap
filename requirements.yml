@@ -5,3 +5,7 @@ collections:
   # community.general 12+ requires a newer ansible-core than these playbooks target.
   - name: community.general
     version: "11.4.10"
+  # ansible.posix.firewalld limits the collector to the provisioning subnet.
+  # 2.1.0 requires ansible-core >= 2.15.
+  - name: ansible.posix
+    version: "2.1.0"

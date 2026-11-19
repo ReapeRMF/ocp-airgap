@@ -2,6 +2,12 @@
 # roles/hw_discovery/tasks/deploy_ipxe_menu.yml
 # Deploys the iPXE boot menu (rendered from template)
 
+- name: Ensure the collector token is available to the boot menu
+  ansible.builtin.include_role:
+    name: hw_collector
+    tasks_from: token.yml
+  become: true
+
 - name: Ensure iPXE directory exists
   ansible.builtin.file:
     path: /var/www/html/ipxe

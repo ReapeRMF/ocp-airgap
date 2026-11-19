@@ -19,6 +19,6 @@ collector_data_dir: "/var/lib/hardware-inventory"
 local_artifacts_dir: "/opt/offline-artifacts-x86_64"
 bastion_ip: "192.168.1.185"   # Your current IP
 
-# Historical air-gap default: install local RPMs without GPG verification.
-# Inventory and -e can override this. The deploy playbook does not set it itself.
-airgap_disable_gpg_check: true
+# RPM installs verify signatures with the keys shipped in the bundle.
+# Pass -e airgap_disable_gpg_check=true only when those keys cannot be imported.
+airgap_disable_gpg_check: false

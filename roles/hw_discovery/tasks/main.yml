@@ -77,6 +77,11 @@
       ansible.builtin.uri:
         url: "http://{{ bastion_ip | default('192.168.50.10') }}:{{ collector_port | default('5000') }}/api/inventory"
         method: POST
+        headers:
+          Authorization: >-
+            Bearer {{ collector_auth_token
+            | default(lookup('file', collector_token_path | default('/etc/hw-collector/auth_token')), true)
+            | trim }}
         body_format: json
         body:
           primary_id: "{{ ansible_facts['product_serial'] | default(ansible_facts['product_uuid']) | default('UNKNOWN') }}"
@@ -97,3 +102,4 @@
           discovery_method: "{{ 'In-Band IPMI' if hw_discovery_local_bmc_ip is not none else 'Standard OS Probing' }}"
         status_code: 200
       changed_when: true
+      no_log: true

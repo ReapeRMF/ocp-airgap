@@ -49,6 +49,10 @@ ansible-playbook -i environments/dev/hosts playbooks/hw_process_discovered.yml
 
 ---
 
+## Security
+
+Collector authentication, RPM signature checks, and pinned iPXE checksums are described in `docs/security.md`.
+
 ## CI
 
 Pull requests run yamllint, `ansible-lint --profile production`, playbook syntax-check, shellcheck, and gitleaks. Skipped rules and settings that still need an owner decision are listed in `docs/lint-exceptions.md`. Install collections with `ansible-galaxy collection install -r requirements.yml` before lint or a syntax-check.
