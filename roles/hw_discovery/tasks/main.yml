@@ -26,14 +26,15 @@
 
     - name: Query local BMC system interface driver for LAN topologies
       ansible.builtin.command: ipmitool lan print 1
-      register: ipmi_lan_raw
+      register: hw_discovery_ipmi_lan_raw
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Parse local management channel layout metrics into temporary variables
       ansible.builtin.set_fact:
-        local_bmc_ip: "{{ ipmi_lan_raw.stdout | regex_search('IP Address\\s+:\\s+([0-9.]+)', '\\1') | default(none, true) }}"
-        local_bmc_mac: "{{ ipmi_lan_raw.stdout | regex_search('MAC Address\\s+:\\s+([0-9a-fA-F:]+)', '\\1') | default(none, true) }}"
+        hw_discovery_local_bmc_ip: "{{ hw_discovery_ipmi_lan_raw.stdout | regex_search('IP Address\\s+:\\s+([0-9.]+)', '\\1') | default(none, true) }}"
+        hw_discovery_local_bmc_mac: "{{ hw_discovery_ipmi_lan_raw.stdout | regex_search('MAC Address\\s+:\\s+([0-9a-fA-F:]+)', '\\1') | default(none, true) }}"
 
     # --- NEW: GATHER TELEMETRY FIELD BACKLOGS FOR LIVE PROBING MODE ---
     # pipefail makes the existing "|| echo unknown" run when grep finds nothing.
@@ -44,9 +45,10 @@
           set -o pipefail
           efibootmgr 2>/dev/null | grep -i "BootOrder" | cut -d' ' -f2 || echo "unknown"
         executable: /bin/bash
-      register: live_boot_sequence
+      register: hw_discovery_live_boot_sequence
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Query Active UEFI Boot Target
       ansible.builtin.shell:
@@ -54,9 +56,10 @@
           set -o pipefail
           efibootmgr 2>/dev/null | grep -i "BootCurrent" | cut -d' ' -f2 || echo "unknown"
         executable: /bin/bash
-      register: live_active_boot_target
+      register: hw_discovery_live_active_boot_target
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Query Processor Microcode Patch Version
       ansible.builtin.shell:
@@ -64,9 +67,10 @@
           set -o pipefail
           grep -m1 -i "microcode" /proc/cpuinfo | awk '{print $3}' || echo "unknown"
         executable: /bin/bash
-      register: live_cpu_microcode
+      register: hw_discovery_live_cpu_microcode
       changed_when: false
       failed_when: false
+      check_mode: false
 
     # --- FLUSH THE COMPLETE SYNCHRONIZED METRIC DATA PACKET TO BACKEND ---
     - name: Stream complete unified hardware inventory report packet to permanent storage
@@ -83,13 +87,13 @@
           os_architecture: "{{ ansible_facts['architecture'] | default('UNKNOWN') }}"
 
           # Synced modern telemetry fields
-          boot_sequence: "{{ live_boot_sequence.stdout | trim }}"
-          active_boot_target: "{{ live_active_boot_target.stdout | trim }}"
-          cpu_microcode: "{{ live_cpu_microcode.stdout | trim }}"
+          boot_sequence: "{{ hw_discovery_live_boot_sequence.stdout | trim }}"
+          active_boot_target: "{{ hw_discovery_live_active_boot_target.stdout | trim }}"
+          cpu_microcode: "{{ hw_discovery_live_cpu_microcode.stdout | trim }}"
 
           # Additive BMC metrics
-          management_ip: "{{ local_bmc_ip }}"
-          management_mac: "{{ local_bmc_mac }}"
-          discovery_method: "{{ 'In-Band IPMI' if local_bmc_ip is not none else 'Standard OS Probing' }}"
+          management_ip: "{{ hw_discovery_local_bmc_ip }}"
+          management_mac: "{{ hw_discovery_local_bmc_mac }}"
+          discovery_method: "{{ 'In-Band IPMI' if hw_discovery_local_bmc_ip is not none else 'Standard OS Probing' }}"
         status_code: 200
       changed_when: true

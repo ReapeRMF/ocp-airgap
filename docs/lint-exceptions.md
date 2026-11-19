@@ -1,18 +1,33 @@
 # Lint exceptions and owner decisions
 
 CI (`.github/workflows/ci.yml`) runs yamllint, `ansible-lint --profile production`,
-`ansible-playbook --syntax-check` on every file under `playbooks/` and
-`roles/*/tests/`, shellcheck on `*.sh`, and gitleaks. No job is skipped.
+`ansible-playbook --syntax-check` on ansible-core 2.16.20 and 2.21.6 for every
+file under `playbooks/` and `roles/*/tests/`, shellcheck, and gitleaks. No job
+is skipped. Actions are pinned to commit SHAs. The gitleaks tarball is checked
+against the release `checksums.txt` and a digest pinned in the workflow.
+`requirements-ci.txt` pins the Python tools. Dependabot watches GitHub Actions
+and that pip file.
 
-Production ansible-lint stays enabled. One rule is skipped because fixing it
-would change deployed behavior. Everything else that failed the first production
-run was fixed or given an inline `noqa` with a reason.
+Production ansible-lint stays enabled. `var-naming[no-role-prefix]` is not
+disabled for the repository. Role-internal registers were renamed. The public
+defaults that inventory overrides stay unprefixed and are listed in
+`.ansible-lint-ignore`.
 
-## Skipped ansible-lint rule
+## Ignored ansible-lint paths
 
-| Rule | Why it stays off |
-| --- | --- |
-| `var-naming[no-role-prefix]` | Role defaults are the public contract. `environments/dev/group_vars/all.yml`, playbook vars, and templates set `bastion_ip`, `collector_port`, `collector_dir`, `dhcp_*`, and `pxe_*` with no role prefix. Renaming them to `hw_discovery_` / `hw_collector_` / `online_prep_` would silently stop those overrides from applying. `var-naming[read-only]` is still enforced. |
+Each entry in `.ansible-lint-ignore` uses the `skip` qualifier so these known defaults are not warnings. A new unprefixed variable in any other file still fails.
+
+| Path | Rule | Why |
+| --- | --- | --- |
+| `roles/hw_discovery/defaults/main.yml` | `var-naming[no-role-prefix]` | Inventory, playbooks, and templates set `bastion_ip`, `collector_port`, `dhcp_*`, and `pxe_*` with no role prefix. |
+| `roles/hw_collector/defaults/main.yml` | `var-naming[no-role-prefix]` | Same contract for `collector_user`, `collector_dir`, `collector_port`, and `offline_wheel_dir`. |
+| `roles/online_prep/defaults/main.yml` | `var-naming[no-role-prefix]` | `staging_dir` and the bundle names are the role's public inputs. |
+
+Internal names now use a role prefix: `hw_collector_wheel_dir_stat`,
+`hw_discovery_ipmi_lan_raw`, `hw_discovery_local_bmc_ip`,
+`hw_discovery_local_bmc_mac`, `hw_discovery_live_boot_sequence`,
+`hw_discovery_live_active_boot_target`, and `hw_discovery_live_cpu_microcode`.
+`var-naming[read-only]` is still enforced everywhere.
 
 `playbooks/hw_process_discovered.yml` used to set `inventory_dir`, which is a read-only Ansible variable. The play var is now `hardware_inventory_dir`. The path is still `/var/lib/hardware-inventory`.
 
@@ -39,14 +54,14 @@ Inventory is `environments/dev/hosts`, so Ansible loads `environments/dev/group_
 
 Two related mismatches, also left as-is:
 
-- DHCP templates use `dhcp_subnet`, `dhcp_range_start`, and `dhcp_range_end` from `roles/hw_discovery/defaults/main.yml` (`192.168.50.0/24`, `.100`–`.200`). They do not read `pxe_subnet` or `pxe_dhcp_range`, so the group_vars subnet does not drive DHCP.
+- No task renders `roles/hw_discovery/templates/dhcpd.conf.j2` or `dnsmasq.conf.j2`. Ansible does not configure DHCP or TFTP. `pxe_subnet` and `pxe_dhcp_range` are unused. The role defaults `dhcp_subnet` and `dhcp_range_*` are also unused. `setup_bastion.yml` does not claim dnsmasq is running.
 - Group vars set `local_artifacts_dir`. The discovery role reads `offline_artifacts_dir`.
 - `playbooks/build_and_deploy_discovery_image.yml` sets `bastion_ip` to the host's default IPv4 or `192.168.50.10`, which overrides group_vars for that play only.
 - `roles/hw_discovery/files/hardware-discovery.sh` posts to `http://192.168.1.185:5000`. No playbook copies that file. The IPA element embedded in `roles/hw_discovery/tasks/build-ipa.yml` uses `{{ bastion_ip }}` and `{{ collector_port }}`.
 
 ### GPG verification is still disabled for air-gap RPMs
 
-`playbooks/deploy_airgap_bastion.yml` installs local RPMs with `disable_gpg_check: "{{ airgap_disable_gpg_check | bool }}"`. The default is still `true`. Turn it off only after the bastion has the keys that signed the packages downloaded on the online host:
+`playbooks/deploy_airgap_bastion.yml` installs local RPMs with `disable_gpg_check: "{{ airgap_disable_gpg_check | default(true) | bool }}"`. The value lives in `environments/dev/group_vars/all.yml` (still `true`), so inventory can override it. A play var cannot, because play vars outrank group_vars. Turn it off only after the bastion has the keys that signed the packages downloaded on the online host:
 
 ```bash
 ansible-playbook playbooks/deploy_airgap_bastion.yml -e airgap_disable_gpg_check=false

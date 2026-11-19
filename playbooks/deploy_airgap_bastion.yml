@@ -9,10 +9,6 @@
     # Resolve the running user's actual home directory before privilege escalation
     real_user_home: "{{ lookup('env', 'HOME') }}"
     airgap_staging_dir: "{{ real_user_home }}/ansible/airgap_payload"
-    # Local RPMs are installed with GPG checks off. Payloads come from `dnf download`
-    # on an online host and may be signed by keys that are not imported on the bastion.
-    # Default keeps the historical behavior. Set false only after those keys are installed.
-    airgap_disable_gpg_check: true
 
   tasks:
     - name: Validate that local staging folder exists
@@ -69,7 +65,9 @@
       ansible.builtin.dnf:
         name: "{{ install_rpms }}"
         state: present
-        disable_gpg_check: "{{ airgap_disable_gpg_check | bool }}"
+        # Group/host vars can override this. A play var would hide inventory.
+        # Default stays true until signing keys are imported with the bundle.
+        disable_gpg_check: "{{ airgap_disable_gpg_check | default(true) | bool }}"
 
     - name: Create baseline directory structure for boot files and inventory
       ansible.builtin.file:

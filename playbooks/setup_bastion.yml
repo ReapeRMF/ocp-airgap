@@ -19,9 +19,10 @@
         msg: |
           Bastion setup complete.
 
-          Services running:
-            - dnsmasq (DHCP + TFTP)
-            - httpd (serves iPXE menu and discovery image)
+          This playbook does not start DHCP or TFTP. Nothing renders
+          dhcpd.conf.j2 or dnsmasq.conf.j2.
+
+          Service this playbook enables:
             - hw_collector (receives JSON reports on port {{ collector_port }})
 
           Next steps:

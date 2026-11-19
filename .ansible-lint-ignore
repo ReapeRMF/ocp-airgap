@@ -1,0 +1,8 @@
+# Override-facing role defaults. Inventory, playbooks, and templates set these
+# names without a role prefix. Role-internal registers are not listed here.
+# "skip" keeps the known defaults out of the warning count. A new unprefixed
+# variable in any other file still fails production lint.
+# See docs/lint-exceptions.md.
+roles/hw_collector/defaults/main.yml var-naming[no-role-prefix] skip
+roles/hw_discovery/defaults/main.yml var-naming[no-role-prefix] skip
+roles/online_prep/defaults/main.yml var-naming[no-role-prefix] skip

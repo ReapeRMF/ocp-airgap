@@ -7,9 +7,6 @@ exclude_paths:
   - collections/
   - ansible_collections/
 
-# Production profile stays on. Only the rule below is skipped; see docs/lint-exceptions.md.
-skip_list:
-  # Inventory, playbooks, and templates override bastion_ip, collector_port, dhcp_*,
-  # and pxe_* without a role prefix. Renaming them would drop those overrides.
-  # var-naming[read-only] is not skipped.
-  - var-naming[no-role-prefix]
+# var-naming[no-role-prefix] is not skipped globally. Override-facing defaults
+# are listed in .ansible-lint-ignore. New roles are still checked.
+# See docs/lint-exceptions.md.

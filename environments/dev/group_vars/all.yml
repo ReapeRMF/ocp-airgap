@@ -2,9 +2,9 @@
 # Loaded for inventory environments/dev/hosts (group all).
 # OWNER DECISION: environments/dev/all.yml sets the same PXE keys on 192.168.50.0/24
 # and is not auto-loaded. Do not silently copy values between the two files.
-# These pxe_subnet / pxe_dhcp_range keys are not read by the DHCP templates.
-# Those templates use dhcp_subnet and dhcp_range_* from hw_discovery defaults
-# (192.168.50.0/24) unless those names are overridden. bastion_ip here does apply.
+# No task renders dhcpd.conf.j2 or dnsmasq.conf.j2, so these PXE keys do not
+# configure DHCP. bastion_ip here does apply to templates that are rendered.
+# airgap_disable_gpg_check is a group var so inventory can override the playbook.
 
 pxe_subnet: "192.168.1.0/24"
 pxe_dhcp_range: "192.168.1.100,192.168.1.200"
@@ -18,3 +18,7 @@ collector_data_dir: "/var/lib/hardware-inventory"
 
 local_artifacts_dir: "/opt/offline-artifacts-x86_64"
 bastion_ip: "192.168.1.185"   # Your current IP
+
+# Historical air-gap default: install local RPMs without GPG verification.
+# Inventory and -e can override this. The deploy playbook does not set it itself.
+airgap_disable_gpg_check: true
