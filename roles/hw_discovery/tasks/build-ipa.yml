@@ -26,7 +26,7 @@
     content: |
       #!/bin/bash
       set +e
-      
+
       echo ">>> Injecting Production hw-discovery runtime layout..."
 
       # 1. Write the isolation runner script into the target OS runtime bin path
@@ -104,8 +104,12 @@
       DISKS_DETAILED="[]"
       for disk in $(lsblk -dn -o NAME,TYPE 2>/dev/null | awk '$2=="disk" {print $1}'); do
           DEV="/dev/${disk}"
-          BY_PATH=$(ls -1 /dev/disk/by-path/ 2>/dev/null | xargs -I{} sh -c 'readlink -f /dev/disk/by-path/{} | grep -q "'"$DEV"'" && echo "/dev/disk/by-path/{}"' | head -1 || echo "")
-          BY_ID=$(ls -1 /dev/disk/by-id/ 2>/dev/null | xargs -I{} sh -c 'readlink -f /dev/disk/by-id/{} | grep -q "'"$DEV"'" && echo "/dev/disk/by-id/{}"' | head -1 || echo "")
+          BY_PATH=$(ls -1 /dev/disk/by-path/ 2>/dev/null \
+            | xargs -I{} sh -c 'readlink -f /dev/disk/by-path/{} | grep -q "'"$DEV"'" && echo "/dev/disk/by-path/{}"' \
+            | head -1 || echo "")
+          BY_ID=$(ls -1 /dev/disk/by-id/ 2>/dev/null \
+            | xargs -I{} sh -c 'readlink -f /dev/disk/by-id/{} | grep -q "'"$DEV"'" && echo "/dev/disk/by-id/{}"' \
+            | head -1 || echo "")
           SIZE=$(lsblk -dn -o SIZE "$DEV" 2>/dev/null | tr -d ' ')
           MODEL=$(lsblk -dn -o MODEL "$DEV" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
           VENDOR=$(lsblk -dn -o VENDOR "$DEV" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
@@ -120,14 +124,20 @@
 
           # --- NEW STORAGE TELEMETRY FIELDS FROM BACKLOG ---
           SECTOR_SIZE=$(cat /sys/block/"$disk"/queue/physical_block_size 2>/dev/null || echo "unknown")
-          SSD_LIFE_REMAINING=$(smartctl -A "$DEV" 2>/dev/null | grep -E -i "Media_Wearout_Indicator|Percent_Life_Remaining" | awk '{print $NF}' | tr -d '%' | head -1 || echo "unknown")
+          SSD_LIFE_REMAINING=$(smartctl -A "$DEV" 2>/dev/null \
+            | grep -E -i "Media_Wearout_Indicator|Percent_Life_Remaining" \
+            | awk '{print $NF}' | tr -d '%' | head -1 || echo "unknown")
 
           DISK_OBJ=$(jq -n \
               --arg dev "$DEV" --arg by_path "${BY_PATH:-}" --arg by_id "${BY_ID:-}" --arg model "${MODEL:-}" \
               --arg vendor "${VENDOR:-}" --arg serial "${SERIAL:-}" --arg wwn "${WWN:-}" --arg transport "${TRAN:-}" \
               --argjson size_gib "${SIZE_GIB:-0}" --argjson rotational "$ROTATIONAL" --arg hctl "${HCTL:-}" \
               --arg sector_size "$SECTOR_SIZE" --arg ssd_life "$SSD_LIFE_REMAINING" \
-              '{device: $dev, by_path: $by_path, by_id: $by_id, model: $model, vendor: $vendor, serial: $serial, wwn: $wwn, transport: $transport, size_gib: $size_gib, rotational: $rotational, hctl: $hctl, sector_size: $sector_size, ssd_life_remaining: $ssd_life}')
+              '{device: $dev, by_path: $by_path, by_id: $by_id,
+                model: $model, vendor: $vendor, serial: $serial, wwn: $wwn,
+                transport: $transport, size_gib: $size_gib, rotational: $rotational,
+                hctl: $hctl, sector_size: $sector_size,
+                ssd_life_remaining: $ssd_life}')
           DISKS_DETAILED=$(echo "$DISKS_DETAILED" | jq --argjson disk "$DISK_OBJ" '. + [$disk]')
       done
 
@@ -176,7 +186,11 @@
       JSON
 
       echo ">>> Pushing hardware telemetry report to collector..."
-      curl -sS --connect-timeout 5 --max-time 15 -X POST -H "Content-Type: application/json" --data @/var/tmp/hardware.json "http://{{ bastion_ip }}:{{ collector_port }}/api/inventory" || echo "WARNING: Could not reach collector"
+      curl -sS --connect-timeout 5 --max-time 15 \
+        -X POST -H "Content-Type: application/json" \
+        --data @/var/tmp/hardware.json \
+        "http://{{ bastion_ip }}:{{ collector_port }}/api/inventory" \
+        || echo "WARNING: Could not reach collector"
 
       echo "================================================================"
       if [ "$CHAIN_MODE" = "yes" ]; then
@@ -211,14 +225,17 @@
       systemctl enable hw-discovery.service
 
 - name: Build custom IPA Image (CentOS Stream 9 framework)
-  ansible.builtin.shell: >
-    ironic-python-agent-builder centos
-    -r 9-stream
-    --elements-path {{ lookup('env', 'HOME') }}/.cache/ipa-build/dib-build/elements
-    -e hw-discovery
-    -o {{ lookup('env', 'HOME') }}/.cache/ipa-build/ipa-hw-discovery
+  ansible.builtin.command:
+    cmd: >-
+      ironic-python-agent-builder centos
+      -r 9-stream
+      --elements-path {{ lookup('env', 'HOME') }}/.cache/ipa-build/dib-build/elements
+      -e hw-discovery
+      -o {{ lookup('env', 'HOME') }}/.cache/ipa-build/ipa-hw-discovery
   become: true
   become_flags: "-H -S"
+  # The builder always recompiles. Preceding tasks delete the previous artifacts.
+  changed_when: true
 
 - name: Move kernel and initramfs to configured output location
   ansible.builtin.copy:

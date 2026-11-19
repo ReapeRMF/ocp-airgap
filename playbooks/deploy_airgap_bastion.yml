@@ -9,6 +9,10 @@
     # Resolve the running user's actual home directory before privilege escalation
     real_user_home: "{{ lookup('env', 'HOME') }}"
     airgap_staging_dir: "{{ real_user_home }}/ansible/airgap_payload"
+    # Local RPMs are installed with GPG checks off. Payloads come from `dnf download`
+    # on an online host and may be signed by keys that are not imported on the bastion.
+    # Default keeps the historical behavior. Set false only after those keys are installed.
+    airgap_disable_gpg_check: true
 
   tasks:
     - name: Validate that local staging folder exists
@@ -49,15 +53,15 @@
       ansible.builtin.set_fact:
         install_rpms: >-
           {{
-            found_rpms.files 
-            | map(attribute='path') 
-            | reject('search', 'fedora-release') 
-            | reject('search', 'systemd') 
-            | reject('search', 'glibc') 
-            | reject('search', 'bash') 
-            | reject('search', 'coreutils') 
-            | reject('search', 'setup') 
-            | reject('search', 'filesystem') 
+            found_rpms.files
+            | map(attribute='path')
+            | reject('search', 'fedora-release')
+            | reject('search', 'systemd')
+            | reject('search', 'glibc')
+            | reject('search', 'bash')
+            | reject('search', 'coreutils')
+            | reject('search', 'setup')
+            | reject('search', 'filesystem')
             | list
           }}
 
@@ -65,7 +69,7 @@
       ansible.builtin.dnf:
         name: "{{ install_rpms }}"
         state: present
-        disable_gpg_check: true
+        disable_gpg_check: "{{ airgap_disable_gpg_check | bool }}"
 
     - name: Create baseline directory structure for boot files and inventory
       ansible.builtin.file:
@@ -84,4 +88,6 @@
       loop:
         - "ipxe.pxe"
         - "ipxe.efi"
+      # Historical behavior: a missing binary does not fail the play.
+      # Owner decision: fail closed once every bundle is known to contain both files.
       failed_when: false

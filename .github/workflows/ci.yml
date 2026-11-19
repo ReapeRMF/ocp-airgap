@@ -1,0 +1,129 @@
+---
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install yamllint
+        run: pip install "yamllint==1.38.0"
+
+      - name: Run yamllint
+        run: yamllint .
+
+  ansible-lint:
+    name: ansible-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ansible-lint
+        run: pip install "ansible-lint==26.11.0"
+
+      - name: Install collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Run ansible-lint (production)
+        run: ansible-lint --profile production
+
+  syntax-check:
+    name: ansible-playbook syntax-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible
+        run: pip install "ansible-core==2.21.6"
+
+      - name: Install collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Syntax-check every playbook
+        run: |
+          set -euo pipefail
+          mapfile -d '' playbooks < <(
+            find playbooks roles -type f -name '*.yml' \
+              \( -path 'playbooks/*' -o -path 'roles/*/tests/*' \) -print0
+          )
+          if [ "${#playbooks[@]}" -eq 0 ]; then
+            echo "No playbooks found" >&2
+            exit 1
+          fi
+          for playbook in "${playbooks[@]}"; do
+            echo "ansible-playbook --syntax-check ${playbook}"
+            ansible-playbook --syntax-check "${playbook}"
+          done
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        run: |
+          set -euo pipefail
+          mapfile -d '' scripts < <(find . -type f -name '*.sh' -print0)
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "No shell scripts found" >&2
+            exit 1
+          fi
+          shellcheck "${scripts[@]}"
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run gitleaks
+        run: gitleaks detect --source . --redact --verbose --exit-code 1

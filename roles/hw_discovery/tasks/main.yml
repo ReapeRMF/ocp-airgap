@@ -2,10 +2,11 @@
 # roles/hw_discovery/tasks/main.yml
 
 - name: Mode A - Compile Stateless IPA RAMdisk Image
-  ansible.builtin.include_tasks: build-ipa.yml
   when: build_ipa_image | default(true) | bool
+  ansible.builtin.include_tasks: build-ipa.yml
 
 - name: Mode B - Legacy In-Band Live OS Probing
+  when: not (build_ipa_image | default(true) | bool)
   block:
     - name: Ensure target node system facts are freshly populated
       ansible.builtin.setup:
@@ -35,20 +36,34 @@
         local_bmc_mac: "{{ ipmi_lan_raw.stdout | regex_search('MAC Address\\s+:\\s+([0-9a-fA-F:]+)', '\\1') | default(none, true) }}"
 
     # --- NEW: GATHER TELEMETRY FIELD BACKLOGS FOR LIVE PROBING MODE ---
+    # pipefail makes the existing "|| echo unknown" run when grep finds nothing.
+    # Without it, awk/cut exit 0 on empty input and the fallback never runs.
     - name: Query UEFI Boot Order Sequence
-      ansible.builtin.shell: efibootmgr 2>/dev/null | grep -i "BootOrder" | cut -d' ' -f2 || echo "unknown"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          efibootmgr 2>/dev/null | grep -i "BootOrder" | cut -d' ' -f2 || echo "unknown"
+        executable: /bin/bash
       register: live_boot_sequence
       changed_when: false
       failed_when: false
 
     - name: Query Active UEFI Boot Target
-      ansible.builtin.shell: efibootmgr 2>/dev/null | grep -i "BootCurrent" | cut -d' ' -f2 || echo "unknown"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          efibootmgr 2>/dev/null | grep -i "BootCurrent" | cut -d' ' -f2 || echo "unknown"
+        executable: /bin/bash
       register: live_active_boot_target
       changed_when: false
       failed_when: false
 
     - name: Query Processor Microcode Patch Version
-      ansible.builtin.shell: grep -m1 -i "microcode" /proc/cpuinfo | awk '{print $3}' || echo "unknown"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          grep -m1 -i "microcode" /proc/cpuinfo | awk '{print $3}' || echo "unknown"
+        executable: /bin/bash
       register: live_cpu_microcode
       changed_when: false
       failed_when: false
@@ -66,16 +81,15 @@
           cpu_count: "{{ ansible_facts['processor_vcpus'] | default(0) }}"
           ram_total_mb: "{{ ansible_facts['memtotal_mb'] | default(0) }}"
           os_architecture: "{{ ansible_facts['architecture'] | default('UNKNOWN') }}"
-          
+
           # Synced modern telemetry fields
           boot_sequence: "{{ live_boot_sequence.stdout | trim }}"
           active_boot_target: "{{ live_active_boot_target.stdout | trim }}"
           cpu_microcode: "{{ live_cpu_microcode.stdout | trim }}"
-          
+
           # Additive BMC metrics
           management_ip: "{{ local_bmc_ip }}"
           management_mac: "{{ local_bmc_mac }}"
           discovery_method: "{{ 'In-Band IPMI' if local_bmc_ip is not none else 'Standard OS Probing' }}"
         status_code: 200
       changed_when: true
-  when: not (build_ipa_image | default(true) | bool)

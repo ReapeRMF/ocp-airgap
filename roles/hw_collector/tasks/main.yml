@@ -21,7 +21,7 @@
     group: "{{ collector_group }}"
     mode: '0755'
   loop:
-    - "{{ collector_dir }}" 
+    - "{{ collector_dir }}"
     - "{{ collector_data_dir | default('/var/lib/hardware-inventory') }}"
     - "{{ pxe_http_root | default('/var/www/html') }}/nextboot"
 
