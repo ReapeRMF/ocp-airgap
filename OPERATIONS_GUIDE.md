@@ -46,7 +46,7 @@ The production directory layout is structured as follows:
 | --- | --- | --- |
 | `playbooks/seed_airgap_bundle.yml` | Online utility to download dependencies and wheels. | `dstratfo` (User) |
 | `playbooks/deploy_airgap_bastion.yml` | Offline baseline package setup (pip, dnf). | `dstratfo` (User) |
-| `playbooks/setup_bastion.yml` | Configures Apache, DHCP, Gunicorn, and directories. | `dstratfo` (User) |
+| `playbooks/setup_bastion.yml` | Installs the hardware collector. Does not configure DHCP or TFTP. | `dstratfo` (User) |
 | `playbooks/build_and_deploy_discovery_image.yml` | Compiles the CentOS 9 IPA image & deploys iPXE menu. | `dstratfo` (User) |
 | `playbooks/hw_process_discovered.yml` | Administrative console helper to print active reports. | `dstratfo` (User) |
 | `/opt/hw-collector/` | Operational directory containing `collector.py` and venv. | `collector_user:collector_group` (0755) |
@@ -151,8 +151,7 @@ sudo journalctl -u hw_collector -f --no-tail
 # Restart the multi-worker Gunicorn web engine
 sudo systemctl restart hw_collector
 
-# Restart the DHCP and TFTP engines
-sudo systemctl restart dhcpd tftp
+# DHCP and TFTP are not managed by these playbooks.
 
 # Check Apache web server health
 sudo systemctl status httpd
