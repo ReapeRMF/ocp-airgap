@@ -26,14 +26,14 @@ def normalize_primary_id(value):
         return None
     if value[0] in ".-" or value.endswith("."):
         return None
-    if value.lower().endswith(".json"):
+    lowered = value.lower()
+    if lowered.endswith(".json") or lowered.endswith(".ipxe"):
         return None
     if ".." in value or "/" in value or "\\" in value:
         return None
-    normalized = value.lower()
-    if not PRIMARY_ID_RE.fullmatch(normalized):
+    if not PRIMARY_ID_RE.fullmatch(lowered):
         return None
-    return normalized
+    return lowered
 
 
 def validate_primary_id(value):
@@ -176,10 +176,19 @@ def create_app(
         payload = json.dumps(data, indent=2) + "\n"
         script = nextboot_script(primary_id, bastion_ip)
         if role == "enroll":
+            # Claim both names, or neither. A nextboot that already exists
+            # must not leave a newly written inventory file behind.
+            created_inventory = False
             try:
                 exclusive_create(inventory_path, payload, 0o640)
+                created_inventory = True
                 exclusive_create(nextboot_path, script, 0o644)
             except RecordExists:
+                if created_inventory:
+                    try:
+                        os.unlink(inventory_path)
+                    except OSError:
+                        pass
                 return jsonify({"status": "error", "message": "record exists"}), 409
             nextboot_state = "written"
         else:

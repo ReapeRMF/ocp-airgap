@@ -105,6 +105,9 @@ jobs:
             ansible-playbook --syntax-check "${playbook}"
           done
 
+      - name: Run the bundle allow-list test
+        run: ansible-playbook tests/bundle_allowlist.yml
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
@@ -152,7 +155,7 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run collector security tests
-        run: pytest roles/hw_collector/tests/test_collector_security.py
+        run: pytest roles/hw_collector/tests/test_collector_security.py tests/test_primary_fpr.py
 
   gitleaks:
     name: gitleaks

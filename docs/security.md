@@ -16,7 +16,7 @@ Two tokens are generated on the bastion and are not committed.
   update an existing record.
 
 `primary_id` is stored in lowercase. It must match `[A-Za-z0-9._-]{1,64}`,
-must not start with `.` or `-`, must not end with `.` or `.json`, and must
+must not start with `.` or `-`, must not end with `.`, `.json`, or `.ipxe`, and must
 not be a path. Two enroll requests for the same id are serialized with an
 exclusive create, so only one receives 200. Inventory files are mode 0640.
 A non-ASCII `Authorization` header is 401. Bodies over 1 MiB and non-object
@@ -34,8 +34,9 @@ unless `-e collector_skip_firewalld=true`.
 
 httpd is installed when the boot menu is deployed. The Apache rule is
 loaded before `boot.ipxe` is written. `/etc/httpd/conf.d/ipxe-discovery.conf`
-uses `<Directory>` with `Require ip` for the ipxe directory, and
-`Options -Indexes` for `/ipxe`, `/nextboot`, and `/discovery`.
+uses `<Directory>` with `Require ip` for the ipxe directory. The
+document root and those directories set `Options -FollowSymLinks -Indexes`,
+so a sibling symlink cannot serve `/ipxe` without the subnet limit.
 
 ### Residual risk
 

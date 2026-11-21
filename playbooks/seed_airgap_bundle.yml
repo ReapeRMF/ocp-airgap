@@ -93,7 +93,7 @@
         cmd: |
           set -euo pipefail
           gpg --batch --with-colons --import-options show-only --import "{{ item.path }}" \
-            | awk -F: '$1 == "fpr" { print toupper($10) }'
+            | awk -f "{{ playbook_dir }}/../scripts/primary-fpr.awk"
         executable: /bin/bash
       register: seed_gpg_fpr
       changed_when: false
@@ -152,7 +152,7 @@
         cmd: |
           set -euo pipefail
           cd "{{ staging_dir }}"
-          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum | sed 's#  \./#  #' > SHA256SUMS
         executable: /bin/bash
       changed_when: true
 

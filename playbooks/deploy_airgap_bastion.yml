@@ -52,15 +52,15 @@
         src: "{{ airgap_staging_dir }}/SHA256SUMS"
       register: deploy_sums_file
 
-    - name: Parse paths named in SHA256SUMS
+    - name: Drop the checksum from each SHA256SUMS line
       ansible.builtin.set_fact:
-        deploy_sums_relpaths: >-
-          {{
-            (deploy_sums_file.content | b64decode).splitlines()
-            | map('regex_replace', '^[0-9a-fA-F]+  ', '')
-            | map('regex_replace', '^\\./', '')
-            | list
-          }}
+        deploy_sums_raw_paths: "{{ (deploy_sums_file.content | b64decode).splitlines() | map('regex_replace', '^[0-9a-fA-F]+  ', '') | list }}"
+
+    # Double-quoted so '\\.' reaches Jinja as '\.'. A folded >- block leaves
+    # the backslash doubled and does not strip a leading ./ .
+    - name: Strip a leading ./ from SHA256SUMS paths
+      ansible.builtin.set_fact:
+        deploy_sums_relpaths: "{{ deploy_sums_raw_paths | map('regex_replace', '^\\./', '') | list }}"
 
     - name: Find every file in the staged bundle
       ansible.builtin.find:
@@ -158,7 +158,7 @@
         cmd: |
           set -euo pipefail
           gpg --batch --with-colons --import-options show-only --import "{{ item.path }}" \
-            | awk -F: '$1 == "fpr" { print toupper($10) }'
+            | awk -f "{{ playbook_dir }}/../scripts/primary-fpr.awk"
         executable: /bin/bash
       register: deploy_gpg_fpr
       changed_when: false

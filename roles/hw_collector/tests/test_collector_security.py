@@ -79,6 +79,8 @@ def test_rejects_path_traversal_and_absolute_ids(tmp_path):
         "node.",
         "node.json",
         "NODE.JSON",
+        "node.ipxe",
+        "NODE.IPXE",
         "/etc/evil",
         "foo/bar",
         "a\\b",
@@ -164,6 +166,16 @@ def test_non_ascii_authorization_is_unauthorized(tmp_path):
     assert not (tmp_path / "inventory" / "node1.json").exists()
 
 
+def test_enroll_does_not_leave_inventory_when_nextboot_exists(tmp_path):
+    client = _app(tmp_path)
+    nextboot = tmp_path / "nextboot" / "node1.ipxe"
+    nextboot.write_text("#!ipxe\necho already\n")
+    response = _post(client, "node1", token="enroll-token")
+    assert response.status_code == 409
+    assert not (tmp_path / "inventory" / "node1.json").exists()
+    assert nextboot.read_text() == "#!ipxe\necho already\n"
+
+
 def test_enroll_treats_ids_that_differ_only_by_case_as_the_same_record(tmp_path):
     client = _app(tmp_path)
     assert _post(client, "Node1", token="enroll-token").status_code == 200
@@ -229,6 +241,8 @@ def test_validate_primary_id_helper():
     assert not collector_app.validate_primary_id("node.")
     assert not collector_app.validate_primary_id("node.json")
     assert not collector_app.validate_primary_id("NODE.JSON")
+    assert not collector_app.validate_primary_id("node.ipxe")
+    assert not collector_app.validate_primary_id("NODE.IPXE")
     assert not collector_app.validate_primary_id(None)
 
 

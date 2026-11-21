@@ -1,13 +1,18 @@
-# Only the provisioning subnet may fetch the enroll token in the boot menu.
+# Do not follow a sibling symlink back into /ipxe. That would skip the
+# Directory block below and publish the enroll token outside pxe_subnet.
+<Directory "{{ pxe_http_root | default('/var/www/html') }}">
+    Options -FollowSymLinks -Indexes
+</Directory>
+
 <Directory "{{ pxe_http_root | default('/var/www/html') }}/ipxe">
-    Options -Indexes
+    Options -FollowSymLinks -Indexes
     Require ip {{ pxe_subnet }}
 </Directory>
 
 <Directory "{{ pxe_http_root | default('/var/www/html') }}/nextboot">
-    Options -Indexes
+    Options -FollowSymLinks -Indexes
 </Directory>
 
 <Directory "{{ pxe_http_root | default('/var/www/html') }}/discovery">
-    Options -Indexes
+    Options -FollowSymLinks -Indexes
 </Directory>
