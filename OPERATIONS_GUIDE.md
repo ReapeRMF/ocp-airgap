@@ -15,7 +15,7 @@ When a bare-metal server is powered on, it initiates a stateless discovery loop 
 ```
 [Target Server]                                                       [Bastion Host]
       │                                                                     │
-      │─── 1. DHCP / PXE Boot Request ─────────────────────────────────────>│ (DHCPd / TFTP)
+      │─── 1. DHCP / PXE Boot Request ─────────────────────────────────────>│ (DHCP outside Ansible)
       │<── 2. Serves iPXE Boot Menu (boot.ipxe) ────────────────────────────│ (Apache)
       │─── 3. Pulls RAMdisk (vmlinuz & initrd.img) ────────────────────────>│ (Apache)
       │                                                                     │
