@@ -6,7 +6,10 @@ file under `playbooks/` and `roles/*/tests/`, shellcheck, and gitleaks. No job
 is skipped. Actions are pinned to commit SHAs. The gitleaks tarball is checked
 against the release `checksums.txt` and a digest pinned in the workflow.
 `requirements-ci.txt` pins the Python tools. Dependabot watches GitHub Actions
-and that pip file.
+and that pip file. It does not bump two pins that live only in the workflow:
+the gitleaks release (`GITLEAKS_VERSION` and `GITLEAKS_SHA256`) and the
+ansible-core `2.16.20` syntax-check leg. Update those by hand when you move
+gitleaks or the 2.16 line.
 
 Production ansible-lint stays enabled. `var-naming[no-role-prefix]` is not
 disabled for the repository. Role-internal registers were renamed. The public
