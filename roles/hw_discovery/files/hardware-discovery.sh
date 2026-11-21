@@ -13,7 +13,7 @@ CURRENT_LOOP=1
 
 echo "[INIT] Polling motherboard for /dev/ipmi0 character device..."
 while [ ! -c /dev/ipmi0 ]; do
-    if [ $CURRENT_LOOP -gt $MAX_LOOPS ]; then
+    if [ "$CURRENT_LOOP" -gt "$MAX_LOOPS" ]; then
         echo "[WARN] /dev/ipmi0 device failed to settle. Bypassing BMC metrics."
         break
     fi
@@ -32,13 +32,17 @@ BMC_BOOT_NEXT="Unknown"
 # Only run ipmitool if the hardware file descriptor exists
 if [ -c /dev/ipmi0 ]; then
     echo "[SUCCESS] Found /dev/ipmi0 link. Gathering out-of-band metrics..."
-    
-    # Adding "|| BMC_MANAGEMENT_IP='Unknown'" intercepts failures so 'set -e' won't fire
+
+    # Adding "|| BMC_MANAGEMENT_IP='Unknown'" intercepts failures so 'set -e' won't fire.
+    # Exported so shellcheck treats them as intentionally shared. The heredoc below is
+    # quoted ('SCRIPT'), so these values are NOT substituted into the generated
+    # /usr/local/bin/hardware-discovery. See docs/lint-exceptions.md.
     BMC_MANAGEMENT_IP=$(ipmitool lan print 1 2>/dev/null | grep -E "IP Address\s+:" | awk -F: '{print $2}' | xargs) || BMC_MANAGEMENT_IP="Unknown"
     BMC_VENDOR=$(ipmitool mc info 2>/dev/null | grep "Manufacturer Name" | awk -F: '{print $2}' | xargs) || BMC_VENDOR="Unknown"
     BMC_SELFTEST=$(ipmitool mc selftest 2>/dev/null | awk -F: '{print $2}' | xargs) || BMC_SELFTEST="Unknown"
     BMC_LOG_COUNT=$(ipmitool sel info 2>/dev/null | grep "Entries" | awk -F: '{print $2}' | xargs) || BMC_LOG_COUNT="0"
     BMC_BOOT_NEXT=$(ipmitool chassis bootparam get 5 2>/dev/null | grep "Boot Device Selector" | awk -F: '{print $2}' | xargs) || BMC_BOOT_NEXT="Unknown"
+    export BMC_MANAGEMENT_IP BMC_VENDOR BMC_SELFTEST BMC_LOG_COUNT BMC_BOOT_NEXT
 fi
 
 echo "=== hw-discovery: installing runtime discovery service ==="
@@ -212,6 +216,8 @@ PY
 echo ">>> Report written to /var/tmp/hardware.json"
 
 if command -v curl >/dev/null 2>&1; then
+  # Hardcoded collector. group_vars uses 192.168.1.185; role defaults use 192.168.50.10.
+  # Left unchanged on purpose. See docs/lint-exceptions.md.
   curl -sS -X POST -H "Content-Type: application/json" \
     --data @/var/tmp/hardware.json \
     http://192.168.1.185:5000/api/inventory >/dev/null 2>&1 || true

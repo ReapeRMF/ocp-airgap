@@ -46,3 +46,9 @@ Captured nodes register under `/var/lib/hardware-inventory/<PRIMARY_ID>.json` wi
 ```bash
 ansible-playbook -i environments/dev/hosts playbooks/hw_process_discovered.yml
 ```
+
+---
+
+## CI
+
+Pull requests run yamllint, `ansible-lint --profile production`, playbook syntax-check, shellcheck, and gitleaks. Skipped rules and settings that still need an owner decision are listed in `docs/lint-exceptions.md`. Install collections with `ansible-galaxy collection install -r requirements.yml` before lint or a syntax-check.

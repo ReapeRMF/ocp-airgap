@@ -1,0 +1,35 @@
+---
+extends: default
+
+ignore: |
+  .git/
+  collections/
+  ansible_collections/
+
+rules:
+  line-length:
+    max: 160
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  # ansible-lint rejects a custom .yamllint unless comments-indentation is disabled.
+  comments-indentation: disable
+  document-start: enable
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  indentation:
+    spaces: 2
+    indent-sequences: true
+  empty-lines:
+    max: 2
+    max-start: 0
+    max-end: 0

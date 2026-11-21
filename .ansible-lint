@@ -1,0 +1,12 @@
+---
+profile: production
+
+exclude_paths:
+  - .github/
+  - docs/
+  - collections/
+  - ansible_collections/
+
+# var-naming[no-role-prefix] is not skipped globally. Override-facing defaults
+# are listed in .ansible-lint-ignore. New roles are still checked.
+# See docs/lint-exceptions.md.

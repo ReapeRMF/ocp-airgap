@@ -1,5 +1,6 @@
 ---
 - name: Prepare full airgap package (online only)
+  when: online_mode | default(true)
   block:
     - name: Clean staging directory
       ansible.builtin.file:
@@ -17,23 +18,34 @@
         - "{{ staging_dir }}/python_wheels"
         - "{{ staging_dir }}/ansible_collections"
         - "{{ staging_dir }}/discovery"
+        - "{{ staging_dir }}/ipxe_binaries"
 
     # Reuse seeding logic
     - name: Download RPMs and dependencies
-      ansible.builtin.command: dnf download --resolve --alldeps --destdir="{{ staging_dir }}/rpm_packages" -y ipmitool OpenIPMI
+      ansible.builtin.command: >-
+        dnf download --resolve --alldeps
+        --destdir="{{ staging_dir }}/rpm_packages"
+        -y ipmitool OpenIPMI
       changed_when: true
 
+    # Checksum is optional. See ipxe_pxe_checksum in docs/lint-exceptions.md.
     - name: Download iPXE binaries
       ansible.builtin.get_url:
         url: "https://boot.ipxe.org/ipxe.pxe"
         dest: "{{ staging_dir }}/ipxe_binaries/ipxe.pxe"
+        mode: '0644'
+        checksum: "{{ ipxe_pxe_checksum | default(omit) }}"
 
     - name: Download Python wheels
-      ansible.builtin.command: pip3 download gunicorn flask -d "{{ staging_dir }}/python_wheels"
+      ansible.builtin.command: >-
+        pip3 download gunicorn flask -d "{{ staging_dir }}/python_wheels"
       changed_when: true
 
     - name: Download Ansible collections
-      ansible.builtin.command: ansible-galaxy collection download community.general -p "{{ staging_dir }}/ansible_collections"
+      ansible.builtin.command: >-
+        ansible-galaxy collection download
+        -r "{{ playbook_dir }}/../requirements.yml"
+        -p "{{ staging_dir }}/ansible_collections"
       changed_when: true
 
     # Build the IPA image
@@ -43,15 +55,15 @@
         tasks_from: build-ipa.yml
 
     - name: Package discovery image
-      ansible.builtin.archive:
+      community.general.archive:
         path: "{{ ipa_output_dir }}"
         dest: "{{ staging_dir }}/{{ discovery_image_archive }}"
         format: gz
+        mode: '0644'
 
     - name: Create full airgap bundle
-      ansible.builtin.archive:
+      community.general.archive:
         path: "{{ staging_dir }}"
         dest: "{{ playbook_dir }}/../{{ airgap_bundle_name }}"
         format: gz
-      changed_when: true
-  when: online_mode | default(true)
+        mode: '0644'

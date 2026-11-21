@@ -3,11 +3,12 @@
   hosts: localhost
   gather_facts: false
   vars:
-    inventory_dir: "/var/lib/hardware-inventory"
+    # Not inventory_dir: that name is a read-only Ansible magic variable.
+    hardware_inventory_dir: "/var/lib/hardware-inventory"
   tasks:
     - name: Find JSON reports
       ansible.builtin.find:
-        paths: "{{ inventory_dir }}"
+        paths: "{{ hardware_inventory_dir }}"
         patterns: "*.json"
       register: reports
 
