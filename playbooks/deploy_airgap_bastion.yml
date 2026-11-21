@@ -4,6 +4,8 @@
   connection: local
   become: true
   gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../vars/rpm_gpg_keys.yml"
 
   vars:
     # Resolve the running user's actual home directory before privilege escalation
@@ -16,6 +18,34 @@
         path: "{{ airgap_staging_dir }}"
       register: staging_stat
       failed_when: not staging_stat.stat.exists
+
+    - name: Require the out-of-band SHA256SUMS digest
+      ansible.builtin.assert:
+        that:
+          - airgap_sha256sums_digest is defined
+          - airgap_sha256sums_digest | length > 0
+        fail_msg: >-
+          Pass -e airgap_sha256sums_digest=<hex> from airgap_sha256sums.sha256
+          written beside the bundle on the online host. The digest is not
+          inside the archive, so a tampered SHA256SUMS does not match it.
+
+    - name: Verify SHA256SUMS matches the out-of-band digest
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          printf '%s  SHA256SUMS\n' "{{ airgap_sha256sums_digest }}" | sha256sum -c -
+        executable: /bin/bash
+      args:
+        chdir: "{{ airgap_staging_dir }}"
+      changed_when: false
+      check_mode: false
+
+    - name: Verify the staged bundle against SHA256SUMS
+      ansible.builtin.command: sha256sum -c SHA256SUMS
+      args:
+        chdir: "{{ airgap_staging_dir }}"
+      changed_when: false
+      check_mode: false
 
     - name: Create local temporary user collection path
       ansible.builtin.file:
@@ -63,13 +93,6 @@
             | list
           }}
 
-    - name: Verify the staged bundle against SHA256SUMS
-      ansible.builtin.command: sha256sum -c SHA256SUMS
-      args:
-        chdir: "{{ airgap_staging_dir }}"
-      changed_when: false
-      check_mode: false
-
     - name: Find bundled RPM signing keys
       ansible.builtin.find:
         paths: "{{ airgap_staging_dir }}/rpm_gpg_keys"
@@ -84,7 +107,27 @@
           The air-gap bundle has no rpm_gpg_keys. Re-run seed_airgap_bundle.yml
           so the bastion can verify RPM signatures.
 
-    - name: Import bundled RPM signing keys
+    - name: Fingerprint bundled RPM signing keys
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          gpg --batch --with-colons --import-options show-only --import "{{ item.path }}" \
+            | awk -F: '$1 == "fpr" { print toupper($10); exit }'
+        executable: /bin/bash
+      register: deploy_gpg_fpr
+      changed_when: false
+      loop: "{{ deploy_gpg_keys.files }}"
+
+    - name: Reject bundled RPM keys that are not pinned
+      ansible.builtin.assert:
+        that:
+          - item.stdout in rpm_gpg_key_fingerprints
+        fail_msg: >-
+          {{ item.item.path | basename }} fingerprint {{ item.stdout }}
+          is not listed in vars/rpm_gpg_keys.yml.
+      loop: "{{ deploy_gpg_fpr.results }}"
+
+    - name: Import pinned RPM signing keys
       ansible.builtin.rpm_key:
         key: "{{ item.path }}"
         state: present

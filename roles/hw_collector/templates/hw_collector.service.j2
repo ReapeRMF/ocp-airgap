@@ -9,6 +9,7 @@ WorkingDirectory={{ collector_dir }}
 Environment=COLLECTOR_INVENTORY_DIR={{ collector_data_dir | default('/var/lib/hardware-inventory') }}
 Environment=COLLECTOR_NEXTBOOT_DIR={{ pxe_http_root | default('/var/www/html') }}/nextboot
 Environment=COLLECTOR_TOKEN_FILE={{ collector_token_path }}
+Environment=COLLECTOR_ENROLL_TOKEN_FILE={{ collector_enroll_token_path }}
 Environment=COLLECTOR_MAX_BODY_BYTES={{ collector_max_body_bytes }}
 Environment=COLLECTOR_OVERWRITE_NEXTBOOT={{ collector_overwrite_nextboot | bool | ternary('true', 'false') }}
 Environment=COLLECTOR_BASTION_IP={{ bastion_ip }}

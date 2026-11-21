@@ -6,6 +6,7 @@
   gather_facts: true
   vars_files:
     - "{{ playbook_dir }}/../vars/ipxe_checksums.yml"
+    - "{{ playbook_dir }}/../vars/rpm_gpg_keys.yml"
 
   vars:
     # Historical default is a specific user home. Override with -e seed_staging_dir=...
@@ -81,22 +82,53 @@
         file_type: file
       register: seed_gpg_keys
 
-    - name: Require at least one RPM signing key
+    - name: Require pinned RPM key fingerprints
       ansible.builtin.assert:
         that:
-          - seed_gpg_keys.matched > 0
-        fail_msg: "No RPM-GPG-KEY-* files were found in /etc/pki/rpm-gpg."
+          - rpm_gpg_key_fingerprints | length > 0
+        fail_msg: "vars/rpm_gpg_keys.yml has no fingerprints."
 
-    - name: Copy RPM signing keys into the bundle
+    - name: Fingerprint host RPM signing keys
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          gpg --batch --with-colons --import-options show-only --import "{{ item.path }}" \
+            | awk -F: '$1 == "fpr" { print toupper($10); exit }'
+        executable: /bin/bash
+      register: seed_gpg_fpr
+      changed_when: false
+      loop: "{{ seed_gpg_keys.files }}"
+
+    - name: Keep RPM keys whose fingerprint is pinned
+      ansible.builtin.set_fact:
+        seed_gpg_keys_pinned: >-
+          {{
+            seed_gpg_fpr.results
+            | selectattr('stdout', 'in', rpm_gpg_key_fingerprints)
+            | map(attribute='item')
+            | list
+          }}
+
+    - name: Require a pinned RPM signing key on the online host
+      ansible.builtin.assert:
+        that:
+          - seed_gpg_keys_pinned | length > 0
+        fail_msg: >-
+          No key in /etc/pki/rpm-gpg matches vars/rpm_gpg_keys.yml.
+          Seen {{ seed_gpg_fpr.results | map(attribute='stdout') | list }}.
+          Allowed {{ rpm_gpg_key_fingerprints }}.
+
+    - name: Copy pinned RPM signing keys into the bundle
       ansible.builtin.copy:
         src: "{{ item.path }}"
         dest: "{{ staging_dir }}/rpm_gpg_keys/{{ item.path | basename }}"
         mode: "0644"
-      loop: "{{ seed_gpg_keys.files }}"
+      loop: "{{ seed_gpg_keys_pinned }}"
 
     - name: Fetch and download offline Python environment wheels
-      ansible.builtin.command: >
-        pip3 download gunicorn flask -d "{{ staging_dir }}/python_wheels"
+      ansible.builtin.command: >-
+        pip3 download 'gunicorn==23.0.0' 'flask==3.1.2' 'werkzeug==3.1.9'
+        -d "{{ staging_dir }}/python_wheels"
       changed_when: true
 
     - name: Download critical community general Ansible collections
@@ -114,6 +146,27 @@
           find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
         executable: /bin/bash
       changed_when: true
+
+    - name: Hash the SHA256SUMS file itself
+      ansible.builtin.command: sha256sum SHA256SUMS
+      args:
+        chdir: "{{ staging_dir }}"
+      register: seed_sums_digest
+      changed_when: false
+
+    # This file stays outside the tarball. The bastion must be given the hex
+    # as airgap_sha256sums_digest. A copy inside the archive cannot authenticate it.
+    - name: Write the out-of-band SHA256SUMS digest
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/../airgap_sha256sums.sha256"
+        content: "{{ seed_sums_digest.stdout.split()[0] }}\n"
+        mode: "0644"
+
+    - name: Show the digest to carry across the air gap
+      ansible.builtin.debug:
+        msg: >-
+          Pass -e airgap_sha256sums_digest={{ seed_sums_digest.stdout.split()[0] }}
+          on the bastion. That hex is not inside the bundle.
 
     # tar -C dir . stores contents at the archive root. community.general.archive
     # nests paths differently, and unarchive only extracts.

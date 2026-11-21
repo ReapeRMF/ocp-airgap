@@ -1,5 +1,12 @@
 ---
-# Create or reuse the collector bearer token. The value is never committed.
+# Create or reuse the collector bearer tokens. The values are never committed.
+# The group has to exist before the directory is chgrp'd. This file is included
+# from the image build, before the collector role's own user tasks run.
+- name: Ensure collector group exists
+  ansible.builtin.group:
+    name: "{{ collector_group }}"
+    system: true
+
 - name: Ensure collector token directory exists
   ansible.builtin.file:
     path: "{{ collector_token_path | dirname }}"
@@ -44,13 +51,56 @@
   no_log: true
   when: collector_auth_token | default('') | length > 0
 
-- name: Load the collector token for templates
+- name: Check for an existing enroll token
+  ansible.builtin.stat:
+    path: "{{ collector_enroll_token_path }}"
+  register: hw_collector_enroll_stat
+
+- name: Generate and install an enroll token
+  when:
+    - collector_enroll_token | default('') | length == 0
+    - not hw_collector_enroll_stat.stat.exists
+  block:
+    - name: Generate an enroll token
+      ansible.builtin.command:
+        cmd: python3 -c 'import secrets; print(secrets.token_hex(32))'
+      register: hw_collector_enroll_generated
+      changed_when: true
+      no_log: true
+
+    - name: Install the generated enroll token
+      ansible.builtin.copy:
+        dest: "{{ collector_enroll_token_path }}"
+        content: "{{ hw_collector_enroll_generated.stdout }}\n"
+        owner: root
+        group: "{{ collector_group }}"
+        mode: "0640"
+      no_log: true
+
+- name: Install an enroll token supplied by vars
+  ansible.builtin.copy:
+    dest: "{{ collector_enroll_token_path }}"
+    content: "{{ collector_enroll_token }}\n"
+    owner: root
+    group: "{{ collector_group }}"
+    mode: "0640"
+  no_log: true
+  when: collector_enroll_token | default('') | length > 0
+
+- name: Load the collector admin token for local tasks
   ansible.builtin.slurp:
     src: "{{ collector_token_path }}"
   register: hw_collector_token_slurp
   no_log: true
 
-- name: Publish the collector token fact
+- name: Load the collector enroll token for the boot menu
+  ansible.builtin.slurp:
+    src: "{{ collector_enroll_token_path }}"
+  register: hw_collector_enroll_slurp
+  no_log: true
+
+- name: Publish the collector token facts
   ansible.builtin.set_fact:
     hw_collector_auth_token: "{{ hw_collector_token_slurp.content | b64decode | trim }}"
+    hw_collector_enroll_token: "{{ hw_collector_enroll_slurp.content | b64decode | trim }}"
   no_log: true

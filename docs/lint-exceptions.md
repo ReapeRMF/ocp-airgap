@@ -50,7 +50,7 @@ No task ever rendered `dhcpd.conf.j2` or `dnsmasq.conf.j2`, so this repository d
 
 ### GPG verification and iPXE checksums
 
-`airgap_disable_gpg_check` defaults to `false`. The seed playbook ships only RPM signing keys whose fingerprints are listed in `vars/rpm_gpg_keys.yml`. iPXE downloads require the checksums in `vars/ipxe_checksums.yml` unless `-e allow_unverified_ipxe=true`. The bastion deploy fails if `ipxe.pxe` or `ipxe.efi` is missing. Details are in `docs/security.md`.
+`airgap_disable_gpg_check` defaults to `false`. The seed playbook ships only RPM signing keys whose fingerprints are listed in `vars/rpm_gpg_keys.yml`. Before installing collections, deploy checks `SHA256SUMS` against `airgap_sha256sums_digest`, which is passed in and is not inside the bundle. iPXE downloads require the checksums in `vars/ipxe_checksums.yml` unless `-e allow_unverified_ipxe=true`. Details are in `docs/security.md`.
 
 ### Hardcoded path, not a credential
 

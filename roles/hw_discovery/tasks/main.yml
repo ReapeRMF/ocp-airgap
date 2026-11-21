@@ -72,16 +72,36 @@
       failed_when: false
       check_mode: false
 
+    - name: Use the admin token passed into the play
+      ansible.builtin.set_fact:
+        hw_discovery_collector_token: "{{ collector_auth_token }}"
+      when: collector_auth_token | default('') | length > 0
+      no_log: true
+
+    # Read the file only when no token was passed. become so a non-root
+    # play can read the 0640 admin token. The lookup is not in the URI line,
+    # so it does not run on the passed-token path.
+    - name: Read the admin token from the bastion
+      ansible.builtin.slurp:
+        src: "{{ collector_token_path | default('/etc/hw-collector/auth_token') }}"
+      register: hw_discovery_token_slurp
+      become: true
+      no_log: true
+      when: collector_auth_token | default('') | length == 0
+
+    - name: Publish the admin token read from disk
+      ansible.builtin.set_fact:
+        hw_discovery_collector_token: "{{ hw_discovery_token_slurp.content | b64decode | trim }}"
+      no_log: true
+      when: collector_auth_token | default('') | length == 0
+
     # --- FLUSH THE COMPLETE SYNCHRONIZED METRIC DATA PACKET TO BACKEND ---
     - name: Stream complete unified hardware inventory report packet to permanent storage
       ansible.builtin.uri:
         url: "http://{{ bastion_ip | default('192.168.50.10') }}:{{ collector_port | default('5000') }}/api/inventory"
         method: POST
         headers:
-          Authorization: >-
-            Bearer {{ collector_auth_token
-            | default(lookup('file', collector_token_path | default('/etc/hw-collector/auth_token')), true)
-            | trim }}
+          Authorization: "Bearer {{ hw_discovery_collector_token }}"
         body_format: json
         body:
           primary_id: "{{ ansible_facts['product_serial'] | default(ansible_facts['product_uuid']) | default('UNKNOWN') }}"

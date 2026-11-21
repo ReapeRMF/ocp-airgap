@@ -1,0 +1,4 @@
+# Only the provisioning subnet may fetch /ipxe, which contains the enroll token.
+<Location "/ipxe">
+    Require ip {{ pxe_subnet }}
+</Location>

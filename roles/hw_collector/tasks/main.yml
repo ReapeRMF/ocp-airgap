@@ -44,8 +44,9 @@
 - name: Create virtualenv and install from local wheels (air-gapped mode)
   ansible.builtin.pip:
     name:
-      - gunicorn
-      - flask
+      - gunicorn==23.0.0
+      - flask==3.1.2
+      - werkzeug==3.1.9
     virtualenv: "{{ collector_venv }}"
     virtualenv_command: /usr/bin/python3 -m venv
     extra_args: "--find-links {{ offline_wheel_dir }} --no-index"
@@ -54,8 +55,9 @@
 - name: Create virtualenv and install from PyPI (connected mode)
   ansible.builtin.pip:
     name:
-      - gunicorn
-      - flask
+      - gunicorn==23.0.0
+      - flask==3.1.2
+      - werkzeug==3.1.9
     virtualenv: "{{ collector_venv }}"
     virtualenv_command: /usr/bin/python3 -m venv
   when: not hw_collector_wheel_dir_stat.stat.exists

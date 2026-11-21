@@ -1,0 +1,10 @@
+---
+# Primary fingerprints of RPM keys that may be copied into the bundle
+# and imported on the bastion. 40 hex characters, uppercase, no spaces.
+# Any other key found on the online host is left behind.
+#
+# CentOS (CentOS Official Signing Key) <security@centos.org>
+# https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official
+# checked 2026-11-21.
+rpm_gpg_key_fingerprints:
+  - "99DB70FAE1D7CE227FB6488205B555B38483C65D"

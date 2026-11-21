@@ -22,3 +22,33 @@
     mode: '0644'
   become: true
   notify: Restart httpd
+
+- name: Require the provisioning subnet before publishing the boot menu
+  ansible.builtin.assert:
+    that:
+      - pxe_subnet is defined
+      - pxe_subnet | length > 0
+    fail_msg: >-
+      Set pxe_subnet. httpd will only serve /ipxe to that subnet because
+      boot.ipxe contains the enroll token.
+
+- name: Install httpd
+  ansible.builtin.package:
+    name: httpd
+    state: present
+  become: true
+
+- name: Restrict /ipxe to the provisioning subnet
+  ansible.builtin.template:
+    src: httpd/ipxe.conf.j2
+    dest: /etc/httpd/conf.d/ipxe-discovery.conf
+    mode: "0644"
+  become: true
+  notify: Restart httpd
+
+- name: Enable httpd
+  ansible.builtin.service:
+    name: httpd
+    state: started
+    enabled: true
+  become: true

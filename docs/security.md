@@ -1,52 +1,79 @@
 # Security hardening
 
-## Collector
+## Collector tokens
 
-`roles/hw_collector/files/collector_app.py` accepts only a JSON object whose
-`primary_id` matches `[A-Za-z0-9._-]{1,64}` and is not `.`, `..`, or a path.
-The output path has to stay inside the inventory and nextboot directories
-after `realpath`. Requests larger than `collector_max_body_bytes` (default 1
-MiB) are rejected. An existing next-boot script is left in place unless
-`collector_overwrite_nextboot` is true.
+Two tokens are generated on the bastion and are not committed.
 
-Gunicorn binds to `bastion_ip` rather than every interface. When firewalld is
-active, the role adds a rich rule allowing `collector_port`/tcp only from
-`pxe_subnet`. If firewalld is not active, `setup_bastion.yml` fails. Lab hosts
-that do not run firewalld can pass `-e collector_skip_firewalld=true`.
+- Admin token: `/etc/hw-collector/auth_token` (mode 0640). It can create and
+  update inventory. It is not written under the web root. In-band probing
+  uses this token. If `collector_auth_token` is passed into the play, the
+  play does not read the file. Otherwise it reads the file as root.
+- Enroll token: `/etc/hw-collector/enroll_token` (mode 0640). `boot.ipxe`
+  puts only this token on the kernel command line. The enroll token can
+  create a discovery record that does not exist yet. If the inventory file
+  or the next-boot script already exists, the collector returns 409 and
+  does not write or return the stored record. The admin token is what can
+  update an existing record.
 
-The bearer token is generated on the bastion into
-`/etc/hw-collector/auth_token` (mode 0640) unless `collector_auth_token` is
-passed as a variable. It is not stored in git. The iPXE menu puts it on the
-kernel command line as `collector_token=`, and the discovery ramdisk sends
-`Authorization: Bearer`. Anyone who can read the provisioning web root can
-read that token. That is the trust boundary of the provisioning network.
-Rotate the token by replacing the file and re-rendering `boot.ipxe`; the
-ramdisk reads the command line, so the image does not need a rebuild.
+`primary_id` must match `[A-Za-z0-9._-]{1,64}`, must not start with `.` or
+`-`, and must not be a path. Inventory files are mode 0640. A non-ASCII
+`Authorization` header is 401. Bodies over 1 MiB and non-object JSON are
+rejected.
+
+Gunicorn binds to `bastion_ip`. When firewalld is active, `collector_port`/tcp
+is allowed only from `pxe_subnet`. If firewalld is not active, setup fails
+unless `-e collector_skip_firewalld=true`.
+
+httpd is installed when the boot menu is deployed. `/etc/httpd/conf.d/ipxe-discovery.conf`
+contains `Require ip {{ pxe_subnet }}` for `/ipxe`.
+
+### Residual risk
+
+Anyone who can reach httpd from `pxe_subnet` can fetch `/ipxe/boot.ipxe` and
+read the enroll token. With that token they can create new discovery records
+for ids that do not exist yet. They cannot overwrite an existing inventory
+file or next-boot script, and the API does not return stored records.
+`/discovery` and `/nextboot` are not covered by that Apache location. The
+admin token stays off the web server, but it is still on the bastion disk
+and in the memory of an in-band play that passes it. A wrong or very wide
+`pxe_subnet` widens who can read the enroll token. If httpd is started
+without `ipxe-discovery.conf`, the enroll token is reachable by anyone who
+can reach port 80.
 
 ## RPM signatures and the bundle manifest
 
-`airgap_disable_gpg_check` now defaults to `false` in
-`environments/dev/group_vars/all.yml`. The seed playbook copies
-`/etc/pki/rpm-gpg/RPM-GPG-KEY-*` into the bundle, writes `SHA256SUMS` for the
-staged files, and writes `airgap_bundle.tar.gz.sha256` beside the tarball.
-Before installing RPMs, the bastion runs `sha256sum -c SHA256SUMS` and imports
-the bundled keys.
+`airgap_disable_gpg_check` defaults to `false`. Only RPM keys whose primary
+fingerprint is listed in `vars/rpm_gpg_keys.yml` are copied and imported.
+The list currently contains the CentOS official signing key
+`99DB70FAE1D7CE227FB6488205B555B38483C65D`. Add the online host's repository
+key fingerprints to that file before seeding if they differ. Keys that are
+not listed are not copied. A bundled key that is not listed fails the deploy.
 
-Check the tarball after it crosses the air gap:
+The trust anchor for the extracted bundle is the SHA256 of the `SHA256SUMS`
+file, carried outside the archive. The seed playbook writes
+`airgap_sha256sums.sha256` next to the tarball and does not put that digest
+inside the tarball. On the bastion, before any collection or RPM install:
 
 ```bash
-sha256sum -c airgap_bundle.tar.gz.sha256
+ansible-playbook playbooks/deploy_airgap_bastion.yml \
+  -e airgap_sha256sums_digest=<hex-from-airgap_sha256sums.sha256>
 ```
 
+The play checks that digest against `SHA256SUMS`, then runs
+`sha256sum -c SHA256SUMS`. This is an out-of-band digest, not a GPG signature
+on the manifest. The RPM keys travel inside the bundle, so they cannot
+authenticate `SHA256SUMS`. The outer `airgap_bundle.tar.gz.sha256` still
+checks the tarball before you extract it. The digest above is what makes
+the extracted manifest trustworthy.
+
 Pass `-e airgap_disable_gpg_check=true` only when the bastion cannot import
-those keys.
+the pinned keys.
 
 ## iPXE checksums
 
 `vars/ipxe_checksums.yml` pins the SHA256 of the `boot.ipxe.org` builds
-fetched on 2026-11-19. Those URLs are rolling, so a later upstream build fails
-the seed until the checksums are updated. Pass `-e allow_unverified_ipxe=true`
-to download without a checksum.
+fetched on 2026-11-19. Pass `-e allow_unverified_ipxe=true` to skip that
+check. Deploy fails if `ipxe.pxe` or `ipxe.efi` is missing.
 
-`deploy_airgap_bastion.yml` fails if `ipxe.pxe` or `ipxe.efi` is missing from
-the extracted bundle.
+Python packages in the collector virtualenv and the seed wheel download are
+pinned to gunicorn 23.0.0, Flask 3.1.2, and Werkzeug 3.1.9.

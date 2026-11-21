@@ -1,8 +1,10 @@
 ---
 # Loaded for inventory environments/dev/hosts (group all).
-# This is the only dev group_vars file. Ansible does not configure DHCP;
-# pxe_subnet and pxe_dhcp_range record the lab network and are not applied
-# to a DHCP daemon. bastion_ip is used by the templates that are rendered.
+# This is the only dev group_vars file. Ansible does not configure DHCP.
+# pxe_subnet limits the collector firewalld rule and httpd /ipxe.
+# pxe_dhcp_range is the lab record and is not applied to a DHCP daemon.
+# bastion_ip is used by the templates that are rendered. The image play
+# does not override it.
 # airgap_disable_gpg_check is a group var so inventory can override the playbook.
 
 pxe_subnet: "192.168.1.0/24"
