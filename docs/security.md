@@ -15,17 +15,27 @@ Two tokens are generated on the bastion and are not committed.
   does not write or return the stored record. The admin token is what can
   update an existing record.
 
-`primary_id` must match `[A-Za-z0-9._-]{1,64}`, must not start with `.` or
-`-`, and must not be a path. Inventory files are mode 0640. A non-ASCII
-`Authorization` header is 401. Bodies over 1 MiB and non-object JSON are
-rejected.
+`primary_id` is stored in lowercase. It must match `[A-Za-z0-9._-]{1,64}`,
+must not start with `.` or `-`, must not end with `.` or `.json`, and must
+not be a path. Two enroll requests for the same id are serialized with an
+exclusive create, so only one receives 200. Inventory files are mode 0640.
+A non-ASCII `Authorization` header is 401. Bodies over 1 MiB and non-object
+JSON are rejected.
+
+A 409 means a record for that id already exists. That tells the caller the
+serial was enrolled before. The response does not include the stored
+document. A later admin-approval flow, where an operator explicitly clears
+or confirms a pre-claimed serial, is a possible mitigation and is not
+implemented.
 
 Gunicorn binds to `bastion_ip`. When firewalld is active, `collector_port`/tcp
 is allowed only from `pxe_subnet`. If firewalld is not active, setup fails
 unless `-e collector_skip_firewalld=true`.
 
-httpd is installed when the boot menu is deployed. `/etc/httpd/conf.d/ipxe-discovery.conf`
-contains `Require ip {{ pxe_subnet }}` for `/ipxe`.
+httpd is installed when the boot menu is deployed. The Apache rule is
+loaded before `boot.ipxe` is written. `/etc/httpd/conf.d/ipxe-discovery.conf`
+uses `<Directory>` with `Require ip` for the ipxe directory, and
+`Options -Indexes` for `/ipxe`, `/nextboot`, and `/discovery`.
 
 ### Residual risk
 
@@ -33,8 +43,10 @@ Anyone who can reach httpd from `pxe_subnet` can fetch `/ipxe/boot.ipxe` and
 read the enroll token. With that token they can create new discovery records
 for ids that do not exist yet. They cannot overwrite an existing inventory
 file or next-boot script, and the API does not return stored records.
-`/discovery` and `/nextboot` are not covered by that Apache location. The
-admin token stays off the web server, but it is still on the bastion disk
+A 409 still reveals that the serial was already enrolled.
+`/discovery` and `/nextboot` are not limited to `pxe_subnet`. Directory
+listings are disabled on those trees. The admin token stays off the web
+server, but it is still on the bastion disk
 and in the memory of an in-band play that passes it. A wrong or very wide
 `pxe_subnet` widens who can read the enroll token. If httpd is started
 without `ipxe-discovery.conf`, the enroll token is reachable by anyone who
@@ -44,6 +56,8 @@ can reach port 80.
 
 `airgap_disable_gpg_check` defaults to `false`. Only RPM keys whose primary
 fingerprint is listed in `vars/rpm_gpg_keys.yml` are copied and imported.
+Each key file must contain exactly one key. A second key appended to a
+pinned file fails the seed and the deploy.
 The list currently contains the CentOS official signing key
 `99DB70FAE1D7CE227FB6488205B555B38483C65D`. Add the online host's repository
 key fingerprints to that file before seeding if they differ. Keys that are
@@ -76,4 +90,11 @@ fetched on 2026-11-19. Pass `-e allow_unverified_ipxe=true` to skip that
 check. Deploy fails if `ipxe.pxe` or `ipxe.efi` is missing.
 
 Python packages in the collector virtualenv and the seed wheel download are
-pinned to gunicorn 23.0.0, Flask 3.1.2, and Werkzeug 3.1.9.
+pinned to gunicorn 23.0.0, Flask 3.1.3, Werkzeug 3.1.9, and Flask's
+transitive dependencies. CI pins pytest 9.2.0 and its dependencies in
+`requirements-test.txt`.
+
+If discovery gets HTTP 409, the serial was already enrolled and this image
+will not overwrite it. Inspect and remove the bastion record only after
+confirming it is not a live node. An admin-approval workflow for that case
+is a possible future mitigation and is not built here.

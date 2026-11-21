@@ -4,6 +4,7 @@
 The token, directories, and bind address come from the environment so this
 file can be copied as-is and tested without Ansible templating.
 """
+import errno
 import hmac
 import json
 import os
@@ -15,17 +16,29 @@ from flask import Flask, jsonify, request
 PRIMARY_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 
 
+class RecordExists(Exception):
+    """An exclusive create lost the race or the record was already there."""
+
+
+def normalize_primary_id(value):
+    """Return a lowercase id, or None when the id is not safe to store."""
+    if not isinstance(value, str) or not value:
+        return None
+    if value[0] in ".-" or value.endswith("."):
+        return None
+    if value.lower().endswith(".json"):
+        return None
+    if ".." in value or "/" in value or "\\" in value:
+        return None
+    normalized = value.lower()
+    if not PRIMARY_ID_RE.fullmatch(normalized):
+        return None
+    return normalized
+
+
 def validate_primary_id(value):
     """Accept a single path segment. Reject traversal and absolute paths."""
-    if not isinstance(value, str) or not value:
-        return False
-    if value[0] in ".-":
-        return False
-    if value in {".", ".."} or ".." in value:
-        return False
-    if "/" in value or "\\" in value:
-        return False
-    return PRIMARY_ID_RE.fullmatch(value) is not None
+    return normalize_primary_id(value) is not None
 
 
 def bearer_matches(presented, token):
@@ -42,7 +55,8 @@ def bearer_matches(presented, token):
 
 def contained_output_path(root, primary_id, suffix):
     """Return a real path that stays inside root, or raise ValueError."""
-    if not validate_primary_id(primary_id):
+    primary_id = normalize_primary_id(primary_id)
+    if primary_id is None:
         raise ValueError("invalid primary_id")
     root_real = os.path.realpath(root)
     path = os.path.realpath(os.path.join(root_real, primary_id + suffix))
@@ -70,6 +84,31 @@ def atomic_write(path, text, mode=0o644):
         except OSError:
             pass
         raise
+
+
+def exclusive_create(path, text, mode):
+    """Create path only if it does not exist. EEXIST becomes RecordExists."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, mode)
+        try:
+            os.link(tmp, path)
+        except OSError as exc:
+            if exc.errno == errno.EEXIST:
+                raise RecordExists() from exc
+            raise
+        os.chmod(path, mode)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def nextboot_script(primary_id, bastion_ip):
@@ -124,23 +163,32 @@ def create_app(
         data = request.get_json(force=False, silent=True)
         if not isinstance(data, dict):
             return jsonify({"status": "error", "message": "JSON object required"}), 400
-        primary_id = data.get("primary_id")
-        if not validate_primary_id(primary_id):
+        primary_id = normalize_primary_id(data.get("primary_id"))
+        if primary_id is None:
             return jsonify({"status": "error", "message": "invalid primary_id"}), 400
+        data = dict(data)
+        data["primary_id"] = primary_id
         try:
             inventory_path = contained_output_path(inventory_dir, primary_id, ".json")
             nextboot_path = contained_output_path(nextboot_dir, primary_id, ".ipxe")
         except ValueError:
             return jsonify({"status": "error", "message": "invalid primary_id"}), 400
-        record_exists = os.path.exists(inventory_path) or os.path.exists(nextboot_path)
-        if role == "enroll" and record_exists:
-            return jsonify({"status": "error", "message": "record exists"}), 409
-        atomic_write(inventory_path, json.dumps(data, indent=2) + "\n", mode=0o640)
-        if role == "admin" and os.path.exists(nextboot_path) and not overwrite_nextboot:
-            nextboot_state = "unchanged"
-        else:
-            atomic_write(nextboot_path, nextboot_script(primary_id, bastion_ip))
+        payload = json.dumps(data, indent=2) + "\n"
+        script = nextboot_script(primary_id, bastion_ip)
+        if role == "enroll":
+            try:
+                exclusive_create(inventory_path, payload, 0o640)
+                exclusive_create(nextboot_path, script, 0o644)
+            except RecordExists:
+                return jsonify({"status": "error", "message": "record exists"}), 409
             nextboot_state = "written"
+        else:
+            atomic_write(inventory_path, payload, mode=0o640)
+            if os.path.exists(nextboot_path) and not overwrite_nextboot:
+                nextboot_state = "unchanged"
+            else:
+                atomic_write(nextboot_path, script)
+                nextboot_state = "written"
         return (
             jsonify(
                 {

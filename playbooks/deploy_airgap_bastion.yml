@@ -23,11 +23,11 @@
       ansible.builtin.assert:
         that:
           - airgap_sha256sums_digest is defined
-          - airgap_sha256sums_digest | length > 0
+          - airgap_sha256sums_digest is match('^[0-9a-f]{64}$')
         fail_msg: >-
-          Pass -e airgap_sha256sums_digest=<hex> from airgap_sha256sums.sha256
-          written beside the bundle on the online host. The digest is not
-          inside the archive, so a tampered SHA256SUMS does not match it.
+          Pass -e airgap_sha256sums_digest=<64 lowercase hex characters>
+          from airgap_sha256sums.sha256 on the online host.
+          The digest is not inside the archive.
 
     - name: Verify SHA256SUMS matches the out-of-band digest
       ansible.builtin.shell:
@@ -47,6 +47,43 @@
       changed_when: false
       check_mode: false
 
+    - name: Read SHA256SUMS
+      ansible.builtin.slurp:
+        src: "{{ airgap_staging_dir }}/SHA256SUMS"
+      register: deploy_sums_file
+
+    - name: Parse paths named in SHA256SUMS
+      ansible.builtin.set_fact:
+        deploy_sums_relpaths: >-
+          {{
+            (deploy_sums_file.content | b64decode).splitlines()
+            | map('regex_replace', '^[0-9a-fA-F]+  ', '')
+            | map('regex_replace', '^\\./', '')
+            | list
+          }}
+
+    - name: Find every file in the staged bundle
+      ansible.builtin.find:
+        paths: "{{ airgap_staging_dir }}"
+        recurse: true
+        file_type: file
+      register: deploy_bundle_files
+
+    - name: Reject bundle files that SHA256SUMS does not name
+      ansible.builtin.assert:
+        that:
+          - (item.path | relpath(airgap_staging_dir)) in deploy_sums_relpaths
+        fail_msg: >-
+          {{ item.path | relpath(airgap_staging_dir) }} is in the bundle
+          but not named in SHA256SUMS. Refusing to install anything.
+      loop: "{{ deploy_bundle_files.files }}"
+      when: (item.path | relpath(airgap_staging_dir)) != 'SHA256SUMS'
+
+    - name: Load pinned collection requirements
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../requirements.yml"
+        name: deploy_requirements
+
     - name: Create local temporary user collection path
       ansible.builtin.file:
         path: "{{ real_user_home }}/.ansible/collections"
@@ -54,20 +91,29 @@
         mode: '0755'
       become: false
 
-    - name: Find local archived Ansible collections
-      ansible.builtin.find:
-        paths: "{{ airgap_staging_dir }}/ansible_collections"
-        patterns:
-          - "community-general-*.tar.gz"
-          - "ansible-posix-*.tar.gz"
-      register: collection_archive
+    - name: Require the collection archive pinned in requirements.yml
+      ansible.builtin.stat:
+        path: >-
+          {{ airgap_staging_dir }}/ansible_collections/{{ item.name | replace('.', '-') }}-{{ item.version }}.tar.gz
+      loop: "{{ deploy_requirements.collections }}"
+      register: deploy_pinned_collections
       become: false
 
-    - name: Install internal Ansible collections from local staging path
-      ansible.builtin.command: >
-        ansible-galaxy collection install {{ item.path }} --force
-      loop: "{{ collection_archive.files }}"
-      when: collection_archive.matched > 0
+    - name: Fail when a pinned collection archive is missing
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: >-
+          Missing {{ item.item.name }} {{ item.item.version }}
+          under ansible_collections. The bundle must contain that exact file.
+      loop: "{{ deploy_pinned_collections.results }}"
+
+    - name: Install only collection archives pinned in requirements.yml
+      ansible.builtin.command: >-
+        ansible-galaxy collection install
+        {{ airgap_staging_dir }}/ansible_collections/{{ item.name | replace('.', '-') }}-{{ item.version }}.tar.gz
+        --force
+      loop: "{{ deploy_requirements.collections }}"
       changed_when: true
       become: false
 
@@ -112,19 +158,21 @@
         cmd: |
           set -euo pipefail
           gpg --batch --with-colons --import-options show-only --import "{{ item.path }}" \
-            | awk -F: '$1 == "fpr" { print toupper($10); exit }'
+            | awk -F: '$1 == "fpr" { print toupper($10) }'
         executable: /bin/bash
       register: deploy_gpg_fpr
       changed_when: false
       loop: "{{ deploy_gpg_keys.files }}"
 
-    - name: Reject bundled RPM keys that are not pinned
+    - name: Require each bundled key file to hold exactly one pinned key
       ansible.builtin.assert:
         that:
-          - item.stdout in rpm_gpg_key_fingerprints
+          - item.stdout_lines | length == 1
+          - item.stdout_lines[0] in rpm_gpg_key_fingerprints
         fail_msg: >-
-          {{ item.item.path | basename }} fingerprint {{ item.stdout }}
-          is not listed in vars/rpm_gpg_keys.yml.
+          {{ item.item.path | basename }} has fingerprints {{ item.stdout_lines }}.
+          Each file must contain exactly one key, and that key must be listed
+          in vars/rpm_gpg_keys.yml.
       loop: "{{ deploy_gpg_fpr.results }}"
 
     - name: Import pinned RPM signing keys

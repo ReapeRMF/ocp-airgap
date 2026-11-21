@@ -2,9 +2,13 @@
 import importlib.util
 import json
 import os
+import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
+from werkzeug.serving import make_server
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "files" / "collector_app.py"
 SPEC = importlib.util.spec_from_file_location("collector_app", MODULE_PATH)
@@ -66,7 +70,19 @@ def test_rejects_non_object_json(tmp_path):
 
 def test_rejects_path_traversal_and_absolute_ids(tmp_path):
     client = _app(tmp_path)
-    for primary_id in ("../../../tmp/pwn", "..", ".", ".hidden", "-node", "/etc/evil", "foo/bar", "a\\b"):
+    for primary_id in (
+        "../../../tmp/pwn",
+        "..",
+        ".",
+        ".hidden",
+        "-node",
+        "node.",
+        "node.json",
+        "NODE.JSON",
+        "/etc/evil",
+        "foo/bar",
+        "a\\b",
+    ):
         response = _post(client, primary_id)
         assert response.status_code == 400, primary_id
     assert list((tmp_path / "inventory").iterdir()) == []
@@ -77,12 +93,13 @@ def test_valid_id_stays_inside_the_inventory_directory(tmp_path):
     client = _app(tmp_path)
     response = _post(client, "NODE_1.abc")
     assert response.status_code == 200
-    inventory_file = tmp_path / "inventory" / "NODE_1.abc.json"
-    nextboot_file = tmp_path / "nextboot" / "NODE_1.abc.ipxe"
+    inventory_file = tmp_path / "inventory" / "node_1.abc.json"
+    nextboot_file = tmp_path / "nextboot" / "node_1.abc.ipxe"
     assert inventory_file.is_file()
     assert nextboot_file.is_file()
     saved = json.loads(inventory_file.read_text())
-    assert saved["primary_id"] == "NODE_1.abc"
+    assert saved["primary_id"] == "node_1.abc"
+    assert response.get_json()["primary_id"] == "node_1.abc"
     assert "192.0.2.10" in nextboot_file.read_text()
     assert os.path.realpath(inventory_file).startswith(os.path.realpath(tmp_path / "inventory") + os.sep)
     assert (inventory_file.stat().st_mode & 0o777) == 0o640
@@ -147,12 +164,71 @@ def test_non_ascii_authorization_is_unauthorized(tmp_path):
     assert not (tmp_path / "inventory" / "node1.json").exists()
 
 
+def test_enroll_treats_ids_that_differ_only_by_case_as_the_same_record(tmp_path):
+    client = _app(tmp_path)
+    assert _post(client, "Node1", token="enroll-token").status_code == 200
+    again = _post(client, "node1", token="enroll-token")
+    assert again.status_code == 409
+    assert (tmp_path / "inventory" / "node1.json").is_file()
+    assert not (tmp_path / "inventory" / "Node1.json").exists()
+
+
+def test_concurrent_enroll_allows_exactly_one_create(tmp_path):
+    app = collector_app.create_app(
+        str(tmp_path / "inventory"),
+        str(tmp_path / "nextboot"),
+        "test-token",
+        "192.0.2.10",
+        enroll_token="enroll-token",
+    )
+    (tmp_path / "inventory").mkdir()
+    (tmp_path / "nextboot").mkdir()
+    server = make_server("127.0.0.1", 0, app, threaded=True)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    statuses = []
+    lock = threading.Lock()
+
+    def post_once():
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/inventory",
+            data=json.dumps({"primary_id": "race1", "serial_number": "x"}).encode(),
+            headers={
+                "Authorization": "Bearer enroll-token",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                code = response.status
+        except urllib.error.HTTPError as exc:
+            code = exc.code
+        with lock:
+            statuses.append(code)
+
+    workers = [threading.Thread(target=post_once) for _ in range(8)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    server.shutdown()
+    assert statuses.count(200) == 1
+    assert statuses.count(409) == 7
+    assert len(list((tmp_path / "inventory").iterdir())) == 1
+
+
 def test_validate_primary_id_helper():
     assert collector_app.validate_primary_id("abc-DEF.1")
+    assert collector_app.normalize_primary_id("abc-DEF.1") == "abc-def.1"
     assert not collector_app.validate_primary_id("../../../tmp/pwn")
     assert not collector_app.validate_primary_id("..")
     assert not collector_app.validate_primary_id(".hidden")
     assert not collector_app.validate_primary_id("-node")
+    assert not collector_app.validate_primary_id("node.")
+    assert not collector_app.validate_primary_id("node.json")
+    assert not collector_app.validate_primary_id("NODE.JSON")
     assert not collector_app.validate_primary_id(None)
 
 

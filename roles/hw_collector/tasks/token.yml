@@ -87,20 +87,13 @@
   no_log: true
   when: collector_enroll_token | default('') | length > 0
 
-- name: Load the collector admin token for local tasks
-  ansible.builtin.slurp:
-    src: "{{ collector_token_path }}"
-  register: hw_collector_token_slurp
-  no_log: true
-
 - name: Load the collector enroll token for the boot menu
   ansible.builtin.slurp:
     src: "{{ collector_enroll_token_path }}"
   register: hw_collector_enroll_slurp
   no_log: true
 
-- name: Publish the collector token facts
+- name: Publish the enroll token fact
   ansible.builtin.set_fact:
-    hw_collector_auth_token: "{{ hw_collector_token_slurp.content | b64decode | trim }}"
     hw_collector_enroll_token: "{{ hw_collector_enroll_slurp.content | b64decode | trim }}"
   no_log: true

@@ -45,8 +45,13 @@
   ansible.builtin.pip:
     name:
       - gunicorn==23.0.0
-      - flask==3.1.2
+      - flask==3.1.3
       - werkzeug==3.1.9
+      - blinker==1.9.0
+      - click==8.5.1
+      - itsdangerous==2.2.0
+      - jinja2==3.1.6
+      - markupsafe==3.0.4
     virtualenv: "{{ collector_venv }}"
     virtualenv_command: /usr/bin/python3 -m venv
     extra_args: "--find-links {{ offline_wheel_dir }} --no-index"
@@ -56,8 +61,13 @@
   ansible.builtin.pip:
     name:
       - gunicorn==23.0.0
-      - flask==3.1.2
+      - flask==3.1.3
       - werkzeug==3.1.9
+      - blinker==1.9.0
+      - click==8.5.1
+      - itsdangerous==2.2.0
+      - jinja2==3.1.6
+      - markupsafe==3.0.4
     virtualenv: "{{ collector_venv }}"
     virtualenv_command: /usr/bin/python3 -m venv
   when: not hw_collector_wheel_dir_stat.stat.exists

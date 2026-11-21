@@ -1,27 +1,14 @@
 ---
 # roles/hw_discovery/tasks/deploy_ipxe_menu.yml
 # Deploys the iPXE boot menu (rendered from template)
+# The httpd limit is loaded before boot.ipxe is written.
 
 - name: Ensure the collector token is available to the boot menu
   ansible.builtin.include_role:
     name: hw_collector
     tasks_from: token.yml
-  become: true
-
-- name: Ensure iPXE directory exists
-  ansible.builtin.file:
-    path: /var/www/html/ipxe
-    state: directory
-    mode: '0755'
-  become: true
-
-- name: Deploy iPXE boot menu
-  ansible.builtin.template:
-    src: ipxe/boot.ipxe.j2
-    dest: /var/www/html/ipxe/boot.ipxe
-    mode: '0644'
-  become: true
-  notify: Restart httpd
+    apply:
+      become: true
 
 - name: Require the provisioning subnet before publishing the boot menu
   ansible.builtin.assert:
@@ -38,7 +25,7 @@
     state: present
   become: true
 
-- name: Restrict /ipxe to the provisioning subnet
+- name: Restrict discovery web directories
   ansible.builtin.template:
     src: httpd/ipxe.conf.j2
     dest: /etc/httpd/conf.d/ipxe-discovery.conf
@@ -46,9 +33,26 @@
   become: true
   notify: Restart httpd
 
+- name: Apply the httpd restriction before the boot menu exists
+  ansible.builtin.meta: flush_handlers
+
 - name: Enable httpd
   ansible.builtin.service:
     name: httpd
     state: started
     enabled: true
+  become: true
+
+- name: Ensure iPXE directory exists
+  ansible.builtin.file:
+    path: /var/www/html/ipxe
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Deploy iPXE boot menu
+  ansible.builtin.template:
+    src: ipxe/boot.ipxe.j2
+    dest: /var/www/html/ipxe/boot.ipxe
+    mode: '0644'
   become: true

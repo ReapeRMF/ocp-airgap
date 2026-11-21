@@ -78,9 +78,16 @@
       when: collector_auth_token | default('') | length > 0
       no_log: true
 
-    # Read the file only when no token was passed. become so a non-root
-    # play can read the 0640 admin token. The lookup is not in the URI line,
-    # so it does not run on the passed-token path.
+    # A fresh host has no token file until this runs. Skip it when the
+    # token was passed in, so we do not read the file as the wrong user.
+    - name: Ensure collector tokens exist before in-band collection
+      ansible.builtin.include_role:
+        name: hw_collector
+        tasks_from: token.yml
+        apply:
+          become: true
+      when: collector_auth_token | default('') | length == 0
+
     - name: Read the admin token from the bastion
       ansible.builtin.slurp:
         src: "{{ collector_token_path | default('/etc/hw-collector/auth_token') }}"

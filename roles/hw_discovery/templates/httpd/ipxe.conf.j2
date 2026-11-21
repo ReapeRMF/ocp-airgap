@@ -1,4 +1,13 @@
-# Only the provisioning subnet may fetch /ipxe, which contains the enroll token.
-<Location "/ipxe">
+# Only the provisioning subnet may fetch the enroll token in the boot menu.
+<Directory "{{ pxe_http_root | default('/var/www/html') }}/ipxe">
+    Options -Indexes
     Require ip {{ pxe_subnet }}
-</Location>
+</Directory>
+
+<Directory "{{ pxe_http_root | default('/var/www/html') }}/nextboot">
+    Options -Indexes
+</Directory>
+
+<Directory "{{ pxe_http_root | default('/var/www/html') }}/discovery">
+    Options -Indexes
+</Directory>

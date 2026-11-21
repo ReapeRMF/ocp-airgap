@@ -93,21 +93,28 @@
         cmd: |
           set -euo pipefail
           gpg --batch --with-colons --import-options show-only --import "{{ item.path }}" \
-            | awk -F: '$1 == "fpr" { print toupper($10); exit }'
+            | awk -F: '$1 == "fpr" { print toupper($10) }'
         executable: /bin/bash
       register: seed_gpg_fpr
       changed_when: false
       loop: "{{ seed_gpg_keys.files }}"
 
-    - name: Keep RPM keys whose fingerprint is pinned
+    - name: Reject RPM key files that contain more than one key
+      ansible.builtin.assert:
+        that:
+          - item.stdout_lines | length < 2
+        fail_msg: >-
+          {{ item.item.path | basename }} has fingerprints {{ item.stdout_lines }}.
+          Each RPM key file must contain exactly one key.
+      loop: "{{ seed_gpg_fpr.results }}"
+
+    - name: Keep single-key files whose fingerprint is pinned
       ansible.builtin.set_fact:
-        seed_gpg_keys_pinned: >-
-          {{
-            seed_gpg_fpr.results
-            | selectattr('stdout', 'in', rpm_gpg_key_fingerprints)
-            | map(attribute='item')
-            | list
-          }}
+        seed_gpg_keys_pinned: "{{ seed_gpg_keys_pinned | default([]) + [item.item] }}"
+      loop: "{{ seed_gpg_fpr.results }}"
+      when:
+        - item.stdout_lines | length == 1
+        - item.stdout_lines[0] in rpm_gpg_key_fingerprints
 
     - name: Require a pinned RPM signing key on the online host
       ansible.builtin.assert:
@@ -127,7 +134,9 @@
 
     - name: Fetch and download offline Python environment wheels
       ansible.builtin.command: >-
-        pip3 download 'gunicorn==23.0.0' 'flask==3.1.2' 'werkzeug==3.1.9'
+        pip3 download 'gunicorn==23.0.0' 'flask==3.1.3' 'werkzeug==3.1.9'
+        'blinker==1.9.0' 'click==8.5.1' 'itsdangerous==2.2.0'
+        'jinja2==3.1.6' 'markupsafe==3.0.4'
         -d "{{ staging_dir }}/python_wheels"
       changed_when: true
 

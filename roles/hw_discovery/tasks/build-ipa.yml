@@ -192,12 +192,26 @@
           collector_token=*) COLLECTOR_TOKEN="${arg#collector_token=}" ;;
         esac
       done
-      curl -sS --connect-timeout 5 --max-time 15 \
+      CURL_BODY=$(mktemp)
+      CURL_CODE=$(curl -sS --fail-with-body --connect-timeout 5 --max-time 15 \
+        -o "$CURL_BODY" -w '%{http_code}' \
         -X POST -H "Content-Type: application/json" \
         -H "Authorization: Bearer ${COLLECTOR_TOKEN}" \
         --data @/var/tmp/hardware.json \
-        "http://{{ bastion_ip }}:{{ collector_port }}/api/inventory" \
-        || echo "WARNING: Could not reach collector"
+        "http://{{ bastion_ip }}:{{ collector_port }}/api/inventory" || true)
+      if [ "$CURL_CODE" != "200" ]; then
+        echo "ERROR: collector rejected inventory for serial ${PRIMARY_ID} (HTTP ${CURL_CODE})."
+        echo "Response:"
+        cat "$CURL_BODY"
+        echo
+        echo "If this is HTTP 409, a record for serial ${PRIMARY_ID} already exists."
+        echo "Inspect /var/lib/hardware-inventory/${PRIMARY_ID}.json on the bastion"
+        echo "and remove that record only after you confirm it is not a live node."
+        echo "This discovery image cannot approve an overwrite."
+        rm -f "$CURL_BODY"
+        exit 1
+      fi
+      rm -f "$CURL_BODY"
 
       echo "================================================================"
       if [ "$CHAIN_MODE" = "yes" ]; then
