@@ -49,15 +49,15 @@
       ansible.builtin.set_fact:
         install_rpms: >-
           {{
-            found_rpms.files 
-            | map(attribute='path') 
-            | reject('search', 'fedora-release') 
-            | reject('search', 'systemd') 
-            | reject('search', 'glibc') 
-            | reject('search', 'bash') 
-            | reject('search', 'coreutils') 
-            | reject('search', 'setup') 
-            | reject('search', 'filesystem') 
+            found_rpms.files
+            | map(attribute='path')
+            | reject('search', 'fedora-release')
+            | reject('search', 'systemd')
+            | reject('search', 'glibc')
+            | reject('search', 'bash')
+            | reject('search', 'coreutils')
+            | reject('search', 'setup')
+            | reject('search', 'filesystem')
             | list
           }}
 
@@ -65,7 +65,9 @@
       ansible.builtin.dnf:
         name: "{{ install_rpms }}"
         state: present
-        disable_gpg_check: true
+        # Group/host vars can override this. A play var would hide inventory.
+        # Default stays true until signing keys are imported with the bundle.
+        disable_gpg_check: "{{ airgap_disable_gpg_check | default(true) | bool }}"
 
     - name: Create baseline directory structure for boot files and inventory
       ansible.builtin.file:
@@ -84,4 +86,6 @@
       loop:
         - "ipxe.pxe"
         - "ipxe.efi"
+      # Historical behavior: a missing binary does not fail the play.
+      # Owner decision: fail closed once every bundle is known to contain both files.
       failed_when: false

@@ -1,41 +1,29 @@
 # hw_discovery role
 
-This role configures a bastion machine so it can PXE boot new servers, show an iPXE menu, and run a hardware discovery process.
+This role builds the discovery IPA image and can render the iPXE menu. It does not configure DHCP or TFTP. Those templates were removed because no task rendered them; the bastion's DHCP service, if any, is outside this repository.
 
-It sets up dnsmasq (for DHCP and TFTP), httpd (to serve the boot image and iPXE menu), copies the needed iPXE binaries, and deploys the main boot menu.
+`build_ipa_image` defaults to false, so `setup_bastion.yml` does not rebuild the image. `playbooks/build_and_deploy_discovery_image.yml` calls `build-ipa.yml` directly. In-band probing runs only when `inband_discovery` is true.
 
 ## What this role does
 
-- Creates the TFTP and HTTP directory structure used for PXE booting.
-- Copies iPXE binaries (undionly.kpxe, ipxe.efi, snponly.efi, etc.) from a prepared offline artifacts directory.
-- Writes a dnsmasq configuration that provides DHCP addresses and serves files over TFTP.
-- Deploys an iPXE menu that lets the operator choose safe discovery, destructive wipe, or chain mode.
-- Starts and enables dnsmasq, httpd, and lldpd.
-- Opens the necessary firewall ports when firewalld is running.
+- Builds the CentOS Stream 9 IPA image when `build-ipa.yml` is included.
+- Deploys the iPXE menu from `templates/ipxe/boot.ipxe.j2` at the end of that build.
+- Optionally probes the local host and posts inventory when `inband_discovery` is true.
 
 ## Important notes on configuration
 
 The iPXE menu template passes options such as `chain=yes` and `wipe=strong` directly on the `kernel` line. Testing showed that using `imgargs` after loading the kernel did not reliably make those options appear in `/proc/cmdline` inside the live image. Putting the options on the kernel line is the method that worked consistently.
 
-**DHCP Backend Choice**
-
-This role supports two options via the `dhcp_backend` variable:
-
-- `dnsmasq` (default): One process for DHCP + TFTP. Simpler but had repeated reliability problems (port 53 conflicts, not listening on DHCP ports) during testing.
-- `isc`: Uses traditional ISC DHCP (`dhcpd`) + `tftp-server`. This is what ultimately worked reliably in our environment after dnsmasq issues.
-
-Set `dhcp_backend: isc` in your inventory or when running the playbook if you want the ISC path.
-
-The dnsmasq configuration uses `bind-dynamic` and listens on a specific interface. On systems where `systemd-resolved` is also running and using port 53, dnsmasq will fail to start. In that case `systemd-resolved` should be stopped and disabled before using this role for DHCP.
+DHCP and TFTP are not configured by this role. Earlier drafts described dnsmasq and ISC dhcpd; no task rendered those templates, so the templates and handlers were removed.
 
 ## Variables
 
-See `defaults/main.yml` for the full list. The most commonly changed values are:
+See `defaults/main.yml`. Values inventory commonly overrides:
 
-- `bastion_ip` — IP address the new machines will use to reach this server
-- `dhcp_interface` — the network interface that faces the new machines
-- `dhcp_range_start` / `dhcp_range_end` — IP range handed out to new machines
-- `offline_artifacts_dir` — where the prepared iPXE binaries and Fedora image live after extraction
+- `bastion_ip` — address clients use to reach this server
+- `build_ipa_image` — defaults to false; the image playbook builds directly
+- `inband_discovery` — defaults to false
+- `offline_artifacts_dir` — extracted offline artifacts
 
 ## Typical usage
 

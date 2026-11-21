@@ -1,6 +1,7 @@
-#SPDX-License-Identifier: MIT-0
 ---
-- hosts: localhost
+# SPDX-License-Identifier: MIT-0
+- name: Test the hw_collector role
+  hosts: localhost
   remote_user: root
   roles:
     - hw_collector

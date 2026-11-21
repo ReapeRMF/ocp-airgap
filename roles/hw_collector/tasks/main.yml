@@ -21,7 +21,7 @@
     group: "{{ collector_group }}"
     mode: '0755'
   loop:
-    - "{{ collector_dir }}" 
+    - "{{ collector_dir }}"
     - "{{ collector_data_dir | default('/var/lib/hardware-inventory') }}"
     - "{{ pxe_http_root | default('/var/www/html') }}/nextboot"
 
@@ -36,7 +36,7 @@
 - name: Check if offline wheel directory exists
   ansible.builtin.stat:
     path: "{{ offline_wheel_dir }}"
-  register: wheel_dir_stat
+  register: hw_collector_wheel_dir_stat
 
 - name: Create virtualenv and install from local wheels (air-gapped mode)
   ansible.builtin.pip:
@@ -46,7 +46,7 @@
     virtualenv: "{{ collector_venv }}"
     virtualenv_command: /usr/bin/python3 -m venv
     extra_args: "--find-links {{ offline_wheel_dir }} --no-index"
-  when: wheel_dir_stat.stat.exists
+  when: hw_collector_wheel_dir_stat.stat.exists
 
 - name: Create virtualenv and install from PyPI (connected mode)
   ansible.builtin.pip:
@@ -55,7 +55,7 @@
       - flask
     virtualenv: "{{ collector_venv }}"
     virtualenv_command: /usr/bin/python3 -m venv
-  when: not wheel_dir_stat.stat.exists
+  when: not hw_collector_wheel_dir_stat.stat.exists
 
 - name: Deploy strict collector application framework
   ansible.builtin.template:
