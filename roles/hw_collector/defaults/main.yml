@@ -8,3 +8,12 @@ collector_venv: /opt/hw-collector/venv
 # Directory containing pre-downloaded wheels for air-gapped installs.
 # If this directory exists when the role runs, it will install from there instead of PyPI.
 offline_wheel_dir: /opt/offline-artifacts/wheels
+
+# Admin token. Full create and update. Never written under the web root.
+collector_token_path: /etc/hw-collector/auth_token
+# Enroll token. Create-only. This is the value rendered into boot.ipxe.
+collector_enroll_token_path: /etc/hw-collector/enroll_token
+collector_max_body_bytes: 1048576
+collector_overwrite_nextboot: false
+# setup_bastion fails when firewalld is inactive unless this is true.
+collector_skip_firewalld: false

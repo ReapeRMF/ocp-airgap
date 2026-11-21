@@ -27,7 +27,8 @@ Copy the tarball to your air-gapped bastion, extract it, and run the offline set
 # 1. Install baseline offline system structures
 ansible-playbook playbooks/deploy_airgap_bastion.yml
 
-# 2. Configure baseline network infrastructure (DHCP, TFTP, Apache, Gunicorn App)
+# 2. Install the collector. This playbook does not configure DHCP or TFTP
+#    and does not build the discovery image.
 ansible-playbook -i environments/dev/hosts playbooks/setup_bastion.yml --ask-become-pass
 ```
 
@@ -46,3 +47,13 @@ Captured nodes register under `/var/lib/hardware-inventory/<PRIMARY_ID>.json` wi
 ```bash
 ansible-playbook -i environments/dev/hosts playbooks/hw_process_discovered.yml
 ```
+
+---
+
+## Security
+
+Collector authentication, RPM signature checks, and pinned iPXE checksums are described in `docs/security.md`.
+
+## CI
+
+Pull requests run yamllint, `ansible-lint --profile production`, playbook syntax-check, shellcheck, and gitleaks. Skipped rules and settings that still need an owner decision are listed in `docs/lint-exceptions.md`. Install collections with `ansible-galaxy collection install -r requirements.yml` before lint or a syntax-check.

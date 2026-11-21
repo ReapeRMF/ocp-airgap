@@ -53,5 +53,4 @@
 ## blue.example.com
 
 [all]
-localhost
-ENV=environments/dev
+localhost ansible_connection=local

@@ -4,10 +4,13 @@
   connection: local
   become: false
   gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../vars/ipxe_checksums.yml"
+    - "{{ playbook_dir }}/../vars/rpm_gpg_keys.yml"
 
   vars:
-    # Staging directory path for compiling our payload assets
-    staging_dir: "/home/dstratfo/airgap_shipment"
+    # Historical default is a specific user home. Override with -e seed_staging_dir=...
+    staging_dir: "{{ seed_staging_dir | default('/home/dstratfo/airgap_shipment') }}"
 
   tasks:
     - name: Clean existing staging directory
@@ -27,6 +30,18 @@
         - "{{ staging_dir }}/rpm_packages"
         - "{{ staging_dir }}/python_wheels"
         - "{{ staging_dir }}/ipxe_binaries"
+        - "{{ staging_dir }}/rpm_gpg_keys"
+
+    - name: Require pinned iPXE checksums
+      ansible.builtin.assert:
+        that:
+          - ipxe_pxe_checksum | default('') | length > 0
+          - ipxe_efi_checksum | default('') | length > 0
+        fail_msg: >-
+          ipxe_pxe_checksum and ipxe_efi_checksum are required.
+          They live in vars/ipxe_checksums.yml.
+          Pass -e allow_unverified_ipxe=true only when you accept rolling binaries.
+      when: not (allow_unverified_ipxe | default(false) | bool)
 
     - name: Force download IPMI RPMs and dependencies
       ansible.builtin.command: >
@@ -35,27 +50,145 @@
 
     - name: Download iPXE network bootstrap PXE binary
       ansible.builtin.get_url:
-        url: "https://boot.ipxe.org/ipxe.pxe"
+        url: "{{ ipxe_pxe_url }}"
         dest: "{{ staging_dir }}/ipxe_binaries/ipxe.pxe"
         mode: '0644'
+        checksum: "{{ omit if (allow_unverified_ipxe | default(false) | bool) else ipxe_pxe_checksum }}"
 
     - name: Download stable iPXE EFI multi-arch binary
       ansible.builtin.get_url:
-        url: "https://boot.ipxe.org/x86_64-efi/snponly.efi"
+        url: "{{ ipxe_efi_url }}"
         dest: "{{ staging_dir }}/ipxe_binaries/ipxe.efi"
         mode: '0644'
+        checksum: "{{ omit if (allow_unverified_ipxe | default(false) | bool) else ipxe_efi_checksum }}"
+
+    - name: Check the online host RPM signing-key directory
+      ansible.builtin.stat:
+        path: /etc/pki/rpm-gpg
+      register: seed_gpg_dir
+
+    - name: Require RPM signing keys from the online host
+      ansible.builtin.assert:
+        that:
+          - seed_gpg_dir.stat.isdir | default(false)
+        fail_msg: >-
+          /etc/pki/rpm-gpg is missing. Run this playbook on the online host
+          whose keys signed the RPMs you are about to download.
+
+    - name: Find RPM signing keys
+      ansible.builtin.find:
+        paths: /etc/pki/rpm-gpg
+        patterns: "RPM-GPG-KEY-*"
+        file_type: file
+      register: seed_gpg_keys
+
+    - name: Require pinned RPM key fingerprints
+      ansible.builtin.assert:
+        that:
+          - rpm_gpg_key_fingerprints | length > 0
+        fail_msg: "vars/rpm_gpg_keys.yml has no fingerprints."
+
+    - name: Fingerprint host RPM signing keys
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          gpg --batch --with-colons --import-options show-only --import "{{ item.path }}" \
+            | awk -f "{{ playbook_dir }}/../scripts/primary-fpr.awk"
+        executable: /bin/bash
+      register: seed_gpg_fpr
+      changed_when: false
+      loop: "{{ seed_gpg_keys.files }}"
+
+    - name: Reject RPM key files that contain more than one key
+      ansible.builtin.assert:
+        that:
+          - item.stdout_lines | length < 2
+        fail_msg: >-
+          {{ item.item.path | basename }} has fingerprints {{ item.stdout_lines }}.
+          Each RPM key file must contain exactly one key.
+      loop: "{{ seed_gpg_fpr.results }}"
+
+    - name: Keep single-key files whose fingerprint is pinned
+      ansible.builtin.set_fact:
+        seed_gpg_keys_pinned: "{{ seed_gpg_keys_pinned | default([]) + [item.item] }}"
+      loop: "{{ seed_gpg_fpr.results }}"
+      when:
+        - item.stdout_lines | length == 1
+        - item.stdout_lines[0] in rpm_gpg_key_fingerprints
+
+    - name: Require a pinned RPM signing key on the online host
+      ansible.builtin.assert:
+        that:
+          - seed_gpg_keys_pinned | length > 0
+        fail_msg: >-
+          No key in /etc/pki/rpm-gpg matches vars/rpm_gpg_keys.yml.
+          Seen {{ seed_gpg_fpr.results | map(attribute='stdout') | list }}.
+          Allowed {{ rpm_gpg_key_fingerprints }}.
+
+    - name: Copy pinned RPM signing keys into the bundle
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ staging_dir }}/rpm_gpg_keys/{{ item.path | basename }}"
+        mode: "0644"
+      loop: "{{ seed_gpg_keys_pinned }}"
 
     - name: Fetch and download offline Python environment wheels
-      ansible.builtin.command: >
-        pip3 download gunicorn flask -d "{{ staging_dir }}/python_wheels"
+      ansible.builtin.command: >-
+        pip3 download 'gunicorn==23.0.0' 'flask==3.1.3' 'werkzeug==3.1.9'
+        'blinker==1.9.0' 'click==8.5.1' 'itsdangerous==2.2.0'
+        'jinja2==3.1.6' 'markupsafe==3.0.4'
+        -d "{{ staging_dir }}/python_wheels"
       changed_when: true
 
     - name: Download critical community general Ansible collections
-      ansible.builtin.command: >
-        ansible-galaxy collection download community.general -p "{{ staging_dir }}/ansible_collections"
+      ansible.builtin.command: >-
+        ansible-galaxy collection download
+        -r "{{ playbook_dir }}/../requirements.yml"
+        -p "{{ staging_dir }}/ansible_collections"
       changed_when: true
 
-    - name: Compress and pack complete transport payload archive
-      ansible.builtin.command: >
+    - name: Write SHA256SUMS for the staged bundle
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          cd "{{ staging_dir }}"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum | sed 's#  \./#  #' > SHA256SUMS
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Hash the SHA256SUMS file itself
+      ansible.builtin.command: sha256sum SHA256SUMS
+      args:
+        chdir: "{{ staging_dir }}"
+      register: seed_sums_digest
+      changed_when: false
+
+    # This file stays outside the tarball. The bastion must be given the hex
+    # as airgap_sha256sums_digest. A copy inside the archive cannot authenticate it.
+    - name: Write the out-of-band SHA256SUMS digest
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/../airgap_sha256sums.sha256"
+        content: "{{ seed_sums_digest.stdout.split()[0] }}\n"
+        mode: "0644"
+
+    - name: Show the digest to carry across the air gap
+      ansible.builtin.debug:
+        msg: >-
+          Pass -e airgap_sha256sums_digest={{ seed_sums_digest.stdout.split()[0] }}
+          on the bastion. That hex is not inside the bundle.
+
+    # tar -C dir . stores contents at the archive root. community.general.archive
+    # nests paths differently, and unarchive only extracts.
+    - name: Compress and pack complete transport payload archive  # noqa: command-instead-of-module
+      ansible.builtin.command: >-
         tar -czf "{{ playbook_dir }}/../airgap_bundle.tar.gz" -C "{{ staging_dir }}" .
+      changed_when: true
+
+    - name: Write the transport archive checksum
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          cd "{{ playbook_dir }}/.."
+          sha256sum airgap_bundle.tar.gz > airgap_bundle.tar.gz.sha256
+        executable: /bin/bash
       changed_when: true

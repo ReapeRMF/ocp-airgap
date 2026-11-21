@@ -1,0 +1,191 @@
+---
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install yamllint
+        run: pip install -r requirements-ci.txt
+
+      - name: Run yamllint
+        run: yamllint .
+
+  ansible-lint:
+    name: ansible-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      # requirements-ci.txt pins ansible-lint and ansible-core 2.21.6 together.
+      - name: Install ansible-lint and ansible-core
+        run: pip install -r requirements-ci.txt
+
+      - name: Install collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Run ansible-lint (production)
+        run: ansible-lint --profile production
+
+  syntax-check:
+    name: ansible-playbook syntax-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 2.16.20 matches min_ansible_version. 2.21.6 matches requirements-ci.txt.
+        ansible_core:
+          - "2.16.20"
+          - "2.21.6"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible ${{ matrix.ansible_core }}
+        run: pip install "ansible-core==${{ matrix.ansible_core }}"
+
+      - name: Install collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Syntax-check every playbook
+        run: |
+          set -euo pipefail
+          mapfile -d '' playbooks < <(
+            find playbooks roles -type f -name '*.yml' \
+              \( -path 'playbooks/*' -o -path 'roles/*/tests/*' \) -print0
+          )
+          if [ "${#playbooks[@]}" -eq 0 ]; then
+            echo "No playbooks found" >&2
+            exit 1
+          fi
+          for playbook in "${playbooks[@]}"; do
+            echo "ansible-playbook --syntax-check ${playbook}"
+            ansible-playbook --syntax-check "${playbook}"
+          done
+
+      - name: Run the bundle allow-list test
+        run: ansible-playbook tests/bundle_allowlist.yml
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install shellcheck
+        run: pip install -r requirements-ci.txt
+
+      - name: Run shellcheck
+        run: |
+          set -euo pipefail
+          mapfile -d '' scripts < <(find . -type f -name '*.sh' -print0)
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "No shell scripts in the tree."
+            exit 0
+          fi
+          shellcheck "${scripts[@]}"
+
+  collector-tests:
+    name: collector tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt
+
+      - name: Run collector security tests
+        run: pytest roles/hw_collector/tests/test_collector_security.py tests/test_primary_fpr.py
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          # Digest of gitleaks_8.30.1_linux_x64.tar.gz from the release checksums file.
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          sums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          curl -sSfL -o "/tmp/${archive}" "${base}/${archive}"
+          curl -sSfL -o "/tmp/${sums}" "${base}/${sums}"
+          published="$(awk -v file="${archive}" '$2 == file { print $1 }' "/tmp/${sums}")"
+          test "${published}" = "${GITLEAKS_SHA256}"
+          (cd /tmp && grep "${archive}" "${sums}" | sha256sum -c -)
+          tar -xzf "/tmp/${archive}" -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run gitleaks
+        run: gitleaks git . --redact --verbose --exit-code 1

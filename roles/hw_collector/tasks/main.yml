@@ -12,6 +12,9 @@
     shell: /sbin/nologin
     home: "{{ collector_dir }}"
 
+- name: Ensure the collector bearer token
+  ansible.builtin.include_tasks: token.yml
+
 # Securely initializes code home, raw data storage, and the web-accessible PXE nextboot directory
 - name: Create collector directories
   ansible.builtin.file:
@@ -21,7 +24,7 @@
     group: "{{ collector_group }}"
     mode: '0755'
   loop:
-    - "{{ collector_dir }}" 
+    - "{{ collector_dir }}"
     - "{{ collector_data_dir | default('/var/lib/hardware-inventory') }}"
     - "{{ pxe_http_root | default('/var/www/html') }}/nextboot"
 
@@ -36,34 +39,46 @@
 - name: Check if offline wheel directory exists
   ansible.builtin.stat:
     path: "{{ offline_wheel_dir }}"
-  register: wheel_dir_stat
+  register: hw_collector_wheel_dir_stat
 
 - name: Create virtualenv and install from local wheels (air-gapped mode)
   ansible.builtin.pip:
     name:
-      - gunicorn
-      - flask
+      - gunicorn==23.0.0
+      - flask==3.1.3
+      - werkzeug==3.1.9
+      - blinker==1.9.0
+      - click==8.5.1
+      - itsdangerous==2.2.0
+      - jinja2==3.1.6
+      - markupsafe==3.0.4
     virtualenv: "{{ collector_venv }}"
     virtualenv_command: /usr/bin/python3 -m venv
     extra_args: "--find-links {{ offline_wheel_dir }} --no-index"
-  when: wheel_dir_stat.stat.exists
+  when: hw_collector_wheel_dir_stat.stat.exists
 
 - name: Create virtualenv and install from PyPI (connected mode)
   ansible.builtin.pip:
     name:
-      - gunicorn
-      - flask
+      - gunicorn==23.0.0
+      - flask==3.1.3
+      - werkzeug==3.1.9
+      - blinker==1.9.0
+      - click==8.5.1
+      - itsdangerous==2.2.0
+      - jinja2==3.1.6
+      - markupsafe==3.0.4
     virtualenv: "{{ collector_venv }}"
     virtualenv_command: /usr/bin/python3 -m venv
-  when: not wheel_dir_stat.stat.exists
+  when: not hw_collector_wheel_dir_stat.stat.exists
 
-- name: Deploy strict collector application framework
-  ansible.builtin.template:
-    src: hw_collector_app.py.j2
-    dest: "{{ collector_dir }}/collector.py"
+- name: Deploy collector application
+  ansible.builtin.copy:
+    src: collector_app.py
+    dest: "{{ collector_dir }}/collector_app.py"
     owner: "{{ collector_user }}"
     group: "{{ collector_group }}"
-    mode: '0755'
+    mode: "0644"
   notify: Restart hw_collector
 
 - name: Deploy systemd service for the collector
@@ -72,6 +87,35 @@
     dest: /etc/systemd/system/hw_collector.service
     mode: '0644'
   notify: Restart hw_collector
+
+- name: Check whether firewalld is active
+  ansible.builtin.systemd:
+    name: firewalld
+  register: hw_collector_firewalld
+  failed_when: false
+
+- name: Require an active firewall before publishing the collector
+  ansible.builtin.assert:
+    that:
+      - hw_collector_firewalld.status is defined
+      - hw_collector_firewalld.status.ActiveState | default('') == 'active'
+      - pxe_subnet is defined
+      - pxe_subnet | length > 0
+    fail_msg: >-
+      firewalld is not active or pxe_subnet is unset. The collector is not
+      started without a rule limiting port {{ collector_port }}/tcp to the
+      provisioning subnet. Start firewalld, or pass -e collector_skip_firewalld=true.
+  when: not (collector_skip_firewalld | bool)
+
+- name: Limit the collector port to the provisioning subnet
+  ansible.posix.firewalld:
+    rich_rule: >-
+      rule family="ipv4" source address="{{ pxe_subnet }}"
+      port port="{{ collector_port }}" protocol="tcp" accept
+    permanent: true
+    immediate: true
+    state: enabled
+  when: not (collector_skip_firewalld | bool)
 
 - name: Enable and start collector service
   ansible.builtin.service:

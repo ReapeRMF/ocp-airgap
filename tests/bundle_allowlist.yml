@@ -1,0 +1,112 @@
+---
+# Builds SHA256SUMS the same way playbooks/seed_airgap_bundle.yml does, then
+# parses it the same way playbooks/deploy_airgap_bastion.yml does.
+- name: Bundle allow-list matches seed SHA256SUMS
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Choose a staging directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: bundle-allowlist.
+      register: staging_tmp
+
+    - name: Remember the staging directory
+      ansible.builtin.set_fact:
+        staging: "{{ staging_tmp.path }}"
+
+    - name: Exercise the allow-list
+      block:
+        - name: Create a clean bundle tree
+          ansible.builtin.file:
+            path: "{{ staging }}/pkg"
+            state: directory
+            mode: "0755"
+
+        - name: Write a listed file
+          ansible.builtin.copy:
+            dest: "{{ staging }}/pkg/ok.txt"
+            content: "ok\n"
+            mode: "0644"
+
+        - name: Write SHA256SUMS the way the seed playbook does
+          ansible.builtin.shell:
+            cmd: |
+              set -euo pipefail
+              find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum | sed 's#  \./#  #' > SHA256SUMS
+            executable: /bin/bash
+          args:
+            chdir: "{{ staging }}"
+          changed_when: false
+
+        - name: Read SHA256SUMS
+          ansible.builtin.slurp:
+            src: "{{ staging }}/SHA256SUMS"
+          register: deploy_sums_file
+
+        - name: Drop the checksum from each SHA256SUMS line
+          ansible.builtin.set_fact:
+            deploy_sums_raw_paths: "{{ (deploy_sums_file.content | b64decode).splitlines() | map('regex_replace', '^[0-9a-fA-F]+  ', '') | list }}"
+
+        - name: Strip a leading ./ from SHA256SUMS paths
+          ansible.builtin.set_fact:
+            deploy_sums_relpaths: "{{ deploy_sums_raw_paths | map('regex_replace', '^\\./', '') | list }}"
+
+        - name: Find every file in the clean bundle
+          ansible.builtin.find:
+            paths: "{{ staging }}"
+            recurse: true
+            file_type: file
+          register: clean_files
+
+        - name: A clean listed bundle passes
+          ansible.builtin.assert:
+            that:
+              - (item.path | relpath(staging)) in deploy_sums_relpaths
+            fail_msg: "{{ item.path | relpath(staging) }} was not listed"
+          loop: "{{ clean_files.files }}"
+          when: (item.path | relpath(staging)) != 'SHA256SUMS'
+
+        - name: Add a file that is not in SHA256SUMS
+          ansible.builtin.copy:
+            dest: "{{ staging }}/pkg/extra.txt"
+            content: "extra\n"
+            mode: "0644"
+
+        - name: Find files after the extra file appears
+          ansible.builtin.find:
+            paths: "{{ staging }}"
+            recurse: true
+            file_type: file
+          register: dirty_files
+
+        - name: An unlisted file fails the allow-list
+          ansible.builtin.assert:
+            that:
+              - (item.path | relpath(staging)) not in deploy_sums_relpaths
+          loop: "{{ dirty_files.files }}"
+          when: (item.path | relpath(staging)) == 'pkg/extra.txt'
+
+        - name: Parse a legacy SUMS line that still has ./
+          ansible.builtin.set_fact:
+            legacy_raw: >-
+              {{
+                ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  ./pkg/ok.txt']
+                | map('regex_replace', '^[0-9a-fA-F]+  ', '')
+                | list
+              }}
+
+        - name: Strip ./ from the legacy line
+          ansible.builtin.set_fact:
+            legacy_paths: "{{ legacy_raw | map('regex_replace', '^\\./', '') | list }}"
+
+        - name: The ./ prefix is stripped
+          ansible.builtin.assert:
+            that:
+              - legacy_paths == ['pkg/ok.txt']
+      always:
+        - name: Remove the test tree
+          ansible.builtin.file:
+            path: "{{ staging }}"
+            state: absent
