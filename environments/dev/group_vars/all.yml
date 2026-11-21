@@ -1,14 +1,12 @@
 ---
 # Loaded for inventory environments/dev/hosts (group all).
-# OWNER DECISION: environments/dev/all.yml sets the same PXE keys on 192.168.50.0/24
-# and is not auto-loaded. Do not silently copy values between the two files.
-# No task renders dhcpd.conf.j2 or dnsmasq.conf.j2, so these PXE keys do not
-# configure DHCP. bastion_ip here does apply to templates that are rendered.
+# This is the only dev group_vars file. Ansible does not configure DHCP;
+# pxe_subnet and pxe_dhcp_range record the lab network and are not applied
+# to a DHCP daemon. bastion_ip is used by the templates that are rendered.
 # airgap_disable_gpg_check is a group var so inventory can override the playbook.
 
 pxe_subnet: "192.168.1.0/24"
 pxe_dhcp_range: "192.168.1.100,192.168.1.200"
-pxe_tftp_root: "/var/lib/tftpboot"
 pxe_http_root: "/var/www/html"
 collector_port: 5000
 
@@ -16,7 +14,7 @@ collector_port: 5000
 collector_dir: "/opt/hw-collector"
 collector_data_dir: "/var/lib/hardware-inventory"
 
-local_artifacts_dir: "/opt/offline-artifacts-x86_64"
+offline_artifacts_dir: "/opt/offline-artifacts-x86_64"
 bastion_ip: "192.168.1.185"   # Your current IP
 
 # RPM installs verify signatures with the keys shipped in the bundle.
